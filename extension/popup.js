@@ -75,8 +75,9 @@ async function init() {
     });
   }
 
-  const { settings } = await chrome.storage.local.get("settings");
-  document.getElementById("intercept").checked = !!(settings && settings.intercept);
+  const s = await getSettings();
+  document.getElementById("intercept").checked = s.intercept;
+  document.getElementById("ask").checked = s.askBeforeDownload;
 }
 
 function render(items) {
@@ -120,8 +121,11 @@ document.getElementById("clear").addEventListener("click", async () => {
 });
 
 document.getElementById("intercept").addEventListener("change", async (e) => {
-  const { settings } = await chrome.storage.local.get("settings");
-  await chrome.storage.local.set({ settings: { ...(settings || {}), intercept: e.currentTarget.checked } });
+  await setSettings({ intercept: e.currentTarget.checked });
+});
+
+document.getElementById("ask").addEventListener("change", async (e) => {
+  await setSettings({ askBeforeDownload: e.currentTarget.checked });
 });
 
 document.getElementById("options").addEventListener("click", () => chrome.runtime.openOptionsPage());

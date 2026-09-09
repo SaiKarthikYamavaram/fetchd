@@ -291,7 +291,9 @@ body { margin: 0; background: var(--bg); color: var(--fg); }
   height: 100%;
   background: var(--accent-grad);
   border-radius: 999px;
-  transition: width 0.3s ease;
+  /* Ticks arrive every 250ms; matching that exactly, linearly, makes the bar
+     glide continuously instead of easing and restarting mid-animation. */
+  transition: width 0.25s linear;
 }
 .track.indeterminate .track-fill {
   width: 40% !important;
@@ -376,9 +378,34 @@ body { margin: 0; background: var(--bg); color: var(--fg); }
 .field { display: block; margin-bottom: 12px; }
 .field > span { display: block; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
 .field select {
-  width: 100%; box-sizing: border-box; padding: 9px 12px; font: inherit;
-  color: var(--fg); background: var(--surface-2);
-  border: 1px solid var(--border); border-radius: 10px;
+  width: 100%; box-sizing: border-box;
+  /* WebKitGTK paints a native (white) control unless appearance is reset, so
+     the themed background/colour are ignored without this. */
+  -webkit-appearance: none;
+  appearance: none;
+  padding: 9px 34px 9px 12px;
+  font: inherit;
+  color: var(--fg);
+  background-color: var(--surface-2);
+  /* Chevron, since resetting appearance removes the native one. */
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(50% + 2px), calc(100% - 13px) calc(50% + 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.field select:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* The popup list is drawn by the platform; set both so it is legible in dark. */
+.field select option {
+  color: var(--fg);
+  background: var(--surface);
 }
 .field input {
   width: 100%;
@@ -634,3 +661,13 @@ label { cursor: pointer; }
   border-radius: 10px; margin-bottom: 14px; display: block;
   background: var(--surface-2);
 }
+
+/* Add-download dialog */
+.field-inline { display: flex; gap: 8px; }
+.field-inline input { flex: 1; min-width: 0; }
+.field-inline .btn { flex-shrink: 0; }
+.check {
+  display: flex; align-items: center; gap: 9px;
+  margin: 4px 0 2px; font-size: 13px; cursor: pointer;
+}
+.modal .field input[readonly] { color: var(--muted); }

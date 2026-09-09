@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 export type Status =
   | "queued"
@@ -43,14 +44,39 @@ export type Settings = {
   video_quality: string;
 };
 
+/// Payload of `download://confirm`: a captured URL awaiting the add dialog.
+export type ConfirmRequest = {
+  token: string;
+  url: string;
+  video: boolean;
+};
+
 export type ProgressRow = {
   id: string;
   downloaded: number;
   total: number | null;
 };
 
+/// Per-download choices from the add dialog; omitted fields use the settings.
+export type AddOptions = {
+  dir?: string | null;
+  quality?: string | null;
+  start?: boolean;
+};
+
 export const api = {
-  addDownload: (url: string) => invoke<string>("add_download", { url }),
+  addDownload: (url: string, options?: AddOptions) =>
+    invoke<string>("add_download", { url, options: options ?? null }),
+  getDownloadDir: () => invoke<string>("get_download_dir"),
+  /// Confirm a request the extension parked ("ask before download").
+  addPending: (token: string, options?: AddOptions) =>
+    invoke<string>("add_pending", { token, options: options ?? null }),
+  cancelPending: (token: string) => invoke<void>("cancel_pending", { token }),
+  /// Native folder picker for the add dialog's save location.
+  pickFolder: async (defaultPath?: string) => {
+    const picked = await openDialog({ directory: true, multiple: false, defaultPath });
+    return typeof picked === "string" ? picked : null;
+  },
   importUrls: (text: string) => invoke<string[]>("import_urls", { text }),
   isDuplicate: (url: string) => invoke<boolean>("is_duplicate", { url }),
   pause: (id: string) => invoke<void>("pause_download", { id }),

@@ -71,6 +71,36 @@ impl Default for Settings {
     }
 }
 
+/// Per-download choices from the add dialog. All optional: omitted fields fall
+/// back to the global settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AddOptions {
+    /// Save location for this download only.
+    pub dir: Option<String>,
+    /// yt-dlp quality override ("best", "1080", "audio", ...).
+    pub quality: Option<String>,
+    /// Start immediately (default), or add it paused for later.
+    pub start: Option<bool>,
+}
+
+/// A download the extension captured but the user has not confirmed yet.
+/// Held here so the browser session (cookies/UA/referer) survives until the
+/// add dialog is answered.
+#[derive(Debug, Clone)]
+pub struct PendingAdd {
+    pub url: String,
+    pub session: Option<Session>,
+    pub force_video: bool,
+}
+
+/// Emitted to the frontend to open the add dialog for a captured URL.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfirmRequest {
+    pub token: String,
+    pub url: String,
+    pub video: bool,
+}
+
 /// One row as the frontend sees it.
 #[derive(Debug, Clone, Serialize)]
 pub struct DownloadView {
@@ -125,6 +155,8 @@ pub struct AppState {
     gen: AtomicU64,
     /// Shared bandwidth limiter; rebuilt when the cap setting changes.
     throttle: Mutex<Throttle>,
+    /// Captured-but-unconfirmed adds, keyed by token (see `PendingAdd`).
+    pending: Mutex<HashMap<String, PendingAdd>>,
     data_dir: PathBuf,
     config_dir: PathBuf,
 }
@@ -158,6 +190,7 @@ impl AppState {
             // Throttle spawns a task); `rebuild_throttle` applies the saved cap
             // from a runtime context during setup.
             throttle: Mutex::new(Throttle::unlimited()),
+            pending: Mutex::new(HashMap::new()),
             data_dir,
             config_dir,
         })
@@ -382,10 +415,22 @@ impl AppState {
 
     // -- commands -----------------------------------------------------------
 
+    /// Park a captured request until the user answers the add dialog. Returns
+    /// the token the frontend sends back.
+    pub fn stash_pending(&self, pending: PendingAdd) -> String {
+        let token = format!("p{}", self.gen.fetch_add(1, Ordering::Relaxed));
+        self.pending.lock().unwrap().insert(token.clone(), pending);
+        token
+    }
+
+    pub fn take_pending(&self, token: &str) -> Option<PendingAdd> {
+        self.pending.lock().unwrap().remove(token)
+    }
+
     /// Add a URL typed into the app. Uses the manual cookies.txt session, if
     /// any.
     pub async fn add(&self, app: &AppHandle, url: &str) -> Result<String, String> {
-        self.add_with_session(app, url, None, false).await
+        self.add_with_session(app, url, None, false, AddOptions::default()).await
     }
 
     /// Add a URL, optionally with a session the browser extension captured for
@@ -397,8 +442,13 @@ impl AppState {
         url: &str,
         captured: Option<Session>,
         force_video: bool,
+        opts: AddOptions,
     ) -> Result<String, String> {
-        let dir = self.download_dir(app)?;
+        // A per-download location from the add dialog wins over the default.
+        let dir = match opts.dir.as_deref().filter(|d| !d.trim().is_empty()) {
+            Some(d) => PathBuf::from(d),
+            None => self.download_dir(app)?,
+        };
         let settings = self.settings();
         let session = self.session_for(url, captured.clone());
 
@@ -422,6 +472,12 @@ impl AppState {
         // Only persist a non-default session; a plain download carries none.
         if session.cookie.is_some() || session.referer.is_some() {
             entry.session = Some(session);
+        }
+        entry.quality = opts.quality.filter(|q| !q.trim().is_empty());
+        // "Download later" parks the entry as Paused so `pump` skips it until
+        // the user hits Resume.
+        if opts.start == Some(false) {
+            entry.status = Status::Paused;
         }
         self.queue.lock().unwrap().push(entry);
         self.save_queue();
@@ -594,7 +650,7 @@ fn spawn_transfer(app: AppHandle, state: Arc<AppState>, entry: Download) {
         let plan = entry.plan.clone();
 
         let result: Result<PathBuf, String> = if plan.engine == download::Engine::YtDlp {
-            run_video(&app, &state, &plan, &progress, &id, token.clone()).await
+            run_video(&app, &state, &plan, &progress, &id, entry.quality.clone(), token.clone()).await
         } else {
             run_http(&app, &state, &entry, &plan, &progress, &id, token.clone()).await
         };
@@ -723,6 +779,7 @@ async fn run_video(
     plan: &download::DownloadPlan,
     progress: &Progress,
     id: &str,
+    quality_override: Option<String>,
     token: CancellationToken,
 ) -> Result<PathBuf, String> {
     let settings = state.settings();
@@ -741,11 +798,16 @@ async fn run_video(
         },
     };
 
-    let quality = if settings.video_quality.is_empty() {
-        "best".to_string()
-    } else {
-        settings.video_quality.clone()
-    };
+    // The add dialog's per-download choice wins over the global setting.
+    let quality = quality_override
+        .filter(|q| !q.is_empty())
+        .unwrap_or_else(|| {
+            if settings.video_quality.is_empty() {
+                "best".to_string()
+            } else {
+                settings.video_quality.clone()
+            }
+        });
 
     let emitter = app.clone();
     let row_id = id.to_string();
@@ -770,6 +832,14 @@ async fn run_video(
     // Honour the global speed cap for video downloads too.
     let limit_kb = if settings.bandwidth_kb > 0 { Some(settings.bandwidth_kb) } else { None };
 
+    // yt-dlp fetches a video stream and then an audio stream, restarting its
+    // byte counter for each. Reported raw, the bar would run 0->100% twice.
+    // Accumulate finished phases so the figures only ever move forward.
+    let base_done = Arc::new(AtomicU64::new(0));
+    let last_done = Arc::new(AtomicU64::new(0));
+    let base_total = Arc::new(AtomicU64::new(0));
+    let last_total = Arc::new(AtomicU64::new(0));
+
     crate::ytdlp::run(
         &ytdlp,
         &plan.url,
@@ -779,13 +849,27 @@ async fn run_video(
         limit_kb,
         token,
         move |t| {
-            prog.set_absolute(t.downloaded);
+            // A drop in the reported byte count means yt-dlp moved on to the
+            // next stream; bank the phase that just finished.
+            let prev = last_done.swap(t.downloaded, Ordering::Relaxed);
+            if t.downloaded < prev {
+                base_done.fetch_add(prev, Ordering::Relaxed);
+                base_total.fetch_add(last_total.load(Ordering::Relaxed), Ordering::Relaxed);
+            }
             if let Some(total) = t.total {
+                last_total.store(total, Ordering::Relaxed);
+            }
+
+            let downloaded = base_done.load(Ordering::Relaxed) + t.downloaded;
+            let total = t.total.map(|tt| base_total.load(Ordering::Relaxed) + tt);
+
+            prog.set_absolute(downloaded);
+            if let Some(total) = total {
                 prog_state.set_total(&prog_id, total);
             }
             let _ = emitter.emit(
                 "download://progress",
-                ProgressRow { id: row_id.clone(), downloaded: t.downloaded, total: t.total },
+                ProgressRow { id: row_id.clone(), downloaded, total },
             );
         },
         on_file,
@@ -980,6 +1064,29 @@ mod tests {
         assert_eq!(claimed.id, "x");
         assert!(state.claim_next(5).is_none());
         assert_eq!(status_of(&state, "y"), Status::Paused);
+    }
+
+    /// The add dialog's payload must deserialize exactly as the frontend sends
+    /// it; a field-name mismatch here would silently drop the chosen folder.
+    #[test]
+    fn add_options_deserialize_from_dialog_payload() {
+        let full: AddOptions =
+            serde_json::from_str(r#"{"dir":"/tmp/x","quality":"1080","start":false}"#).unwrap();
+        assert_eq!(full.dir.as_deref(), Some("/tmp/x"));
+        assert_eq!(full.quality.as_deref(), Some("1080"));
+        assert_eq!(full.start, Some(false));
+
+        // "Use setting" sends nulls; everything falls back to the defaults.
+        let nulls: AddOptions =
+            serde_json::from_str(r#"{"dir":null,"quality":null,"start":true}"#).unwrap();
+        assert!(nulls.dir.is_none() && nulls.quality.is_none());
+        assert_eq!(nulls.start, Some(true));
+
+        // Omitted entirely (extension bridge path).
+        let empty: AddOptions = serde_json::from_str("{}").unwrap();
+        assert!(empty.dir.is_none() && empty.quality.is_none() && empty.start.is_none());
+        // Absent `start` must mean "start now".
+        assert!(empty.start != Some(false));
     }
 
     #[test]

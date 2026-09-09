@@ -12,6 +12,7 @@ async function load() {
   document.getElementById("enabled").checked = s.enabled;
   document.getElementById("grabMedia").checked = s.grabMedia;
   document.getElementById("intercept").checked = s.intercept;
+  document.getElementById("askBeforeDownload").checked = s.askBeforeDownload;
   document.getElementById("minSizeKb").value = s.minSizeKb;
   document.getElementById("excludeDomains").value = s.excludeDomains.join("\n");
   for (const box of document.querySelectorAll("[data-type]")) {
@@ -30,6 +31,7 @@ async function save() {
     enabled: document.getElementById("enabled").checked,
     grabMedia: document.getElementById("grabMedia").checked,
     intercept: document.getElementById("intercept").checked,
+    askBeforeDownload: document.getElementById("askBeforeDownload").checked,
     minSizeKb: Math.max(0, Number(document.getElementById("minSizeKb").value) || 0),
     types,
     excludeDomains,

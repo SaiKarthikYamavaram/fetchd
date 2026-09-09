@@ -17,11 +17,11 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
 use serde::Deserialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tiny_http::{Header, Method, Response, Server};
 
 use crate::download::Session;
-use crate::state::{self, AppState};
+use crate::state::{self, AppState, ConfirmRequest, PendingAdd};
 
 /// Fixed port so the extension has a constant target. Bound to loopback only.
 pub const PORT: u16 = 47831;
@@ -37,6 +37,10 @@ struct AddRequest {
     /// Force the yt-dlp video engine (from the extension's "Download video").
     #[serde(default)]
     video: bool,
+    /// Open the app's add dialog instead of queuing straight away, so the user
+    /// can pick a folder and options for this download.
+    #[serde(default)]
+    ask: bool,
 }
 
 /// Start the bridge on its own thread. Returns immediately; logs and keeps
@@ -124,9 +128,27 @@ fn handle_add(app: &AppHandle, state: &Arc<AppState>, body: &str) -> Result<Stri
     let url = req.url.clone();
 
     let force_video = req.video;
+
+    // "Ask before download": park the captured session and let the UI collect
+    // the destination and options. Returns immediately — no metadata probe,
+    // no queue entry until the user confirms.
+    if req.ask {
+        let token = state.stash_pending(PendingAdd {
+            url: url.clone(),
+            session: Some(session),
+            force_video,
+        });
+        crate::show_main(&app);
+        let _ = app.emit(
+            "download://confirm",
+            ConfirmRequest { token: token.clone(), url, video: force_video },
+        );
+        return Ok(token);
+    }
+
     let (tx, rx) = std::sync::mpsc::channel();
     tauri::async_runtime::spawn(async move {
-        let result = state.add_with_session(&app, &url, Some(session), force_video).await;
+        let result = state.add_with_session(&app, &url, Some(session), force_video, Default::default()).await;
         if result.is_ok() {
             state::pump(&app, &state);
         }

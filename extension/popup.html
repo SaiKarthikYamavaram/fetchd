@@ -52,6 +52,8 @@
       }
       label.toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
       a { color: #6366f1; text-decoration: none; cursor: pointer; }
+      .foot-col { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+      .foot-row { display: flex; align-items: center; justify-content: space-between; }
     </style>
   </head>
   <body>
@@ -82,12 +84,18 @@
       <button id="clear">Clear</button>
     </div>
 
-    <footer>
+    <footer class="foot-col">
       <label class="toggle">
-        <input type="checkbox" id="intercept" />
-        <span>Capture browser downloads</span>
+        <input type="checkbox" id="ask" />
+        <span>Ask for folder &amp; options</span>
       </label>
-      <a id="options">Options</a>
+      <div class="foot-row">
+        <label class="toggle">
+          <input type="checkbox" id="intercept" />
+          <span>Capture browser downloads</span>
+        </label>
+        <a id="options">Options</a>
+      </div>
     </footer>
 
     <script src="common.js"></script>

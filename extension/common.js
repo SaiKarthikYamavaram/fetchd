@@ -10,6 +10,9 @@ const UA = typeof navigator !== "undefined" ? navigator.userAgent : "";
 const DEFAULTS = {
   enabled: true,
   intercept: false, // hand the browser's own downloads to fetchd
+  // Let the app ask for a folder/quality per download instead of using the
+  // defaults. The app window comes forward with its add dialog.
+  askBeforeDownload: true,
   grabMedia: true, // detect streamable/attachment media on pages
   minSizeKb: 512, // ignore anything smaller
   types: { video: true, audio: true, archive: true, document: true, image: false, other: true },
@@ -104,14 +107,16 @@ async function cookieHeaderFor(url) {
 }
 
 // Send one download to fetchd. `video` forces the yt-dlp engine (for streaming
-// sites). Returns true on success.
-async function sendToFetchd(url, referer, video = false) {
+// sites). `ask` overrides the "ask before download" setting — batch grabs pass
+// false so a 30-link grab doesn't open 30 dialogs. Returns true on success.
+async function sendToFetchd(url, referer, video = false, ask = null) {
   const cookie = await cookieHeaderFor(url);
+  const askBeforeDownload = ask === null ? (await getSettings()).askBeforeDownload : ask;
   try {
     const res = await fetch(`${FETCHD}/add`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, cookie, userAgent: UA, referer, video }),
+      body: JSON.stringify({ url, cookie, userAgent: UA, referer, video, ask: askBeforeDownload }),
     });
     return res.ok;
   } catch {

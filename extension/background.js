@@ -186,7 +186,7 @@ async function grabFromPage(tab, mode, referer) {
     return;
   }
   let ok = 0;
-  for (const u of wanted) if (await sendToFetchd(u, referer)) ok++;
+  for (const u of wanted) if (await sendToFetchd(u, referer, false, false)) ok++;
   notify("Sent to fetchd", `${ok} of ${wanted.length} ${mode} queued.`);
 }
 
@@ -228,7 +228,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     } else if (msg.type === "downloadAll") {
       const items = await getDetected(msg.tabId);
       let ok = 0;
-      for (const it of items) if (await sendToFetchd(it.url, msg.referer)) ok++;
+      for (const it of items) if (await sendToFetchd(it.url, msg.referer, false, false)) ok++;
       sendResponse({ ok, total: items.length });
     } else if (msg.type === "clear") {
       await clearDetected(msg.tabId);

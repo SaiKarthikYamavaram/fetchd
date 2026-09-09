@@ -15,10 +15,10 @@ use tauri::{
     AppHandle, Manager, State, WindowEvent,
 };
 
-use state::{AppState, DownloadView, Settings};
+use state::{AddOptions, AppState, DownloadView, Settings};
 
 /// Bring the main window back from the tray and focus it.
-fn show_main(app: &AppHandle) {
+pub fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -29,10 +29,59 @@ fn show_main(app: &AppHandle) {
 type Shared<'a> = State<'a, Arc<AppState>>;
 
 #[tauri::command]
-async fn add_download(app: AppHandle, state: Shared<'_>, url: String) -> Result<String, String> {
-    let id = state.add(&app, &url).await?;
-    state::pump(&app, &state);
+async fn add_download(
+    app: AppHandle,
+    state: Shared<'_>,
+    url: String,
+    options: Option<AddOptions>,
+) -> Result<String, String> {
+    let opts = options.unwrap_or_default();
+    let start = opts.start != Some(false);
+    let id = state.add_with_session(&app, &url, None, false, opts).await?;
+    // "Download later" was already parked as Paused; don't start it.
+    if start {
+        state::pump(&app, &state);
+    } else {
+        state::emit_queue(&app, &state);
+    }
     Ok(id)
+}
+
+/// Confirm a request the extension parked: add it with the chosen options,
+/// replaying the browser session captured at capture time.
+#[tauri::command]
+async fn add_pending(
+    app: AppHandle,
+    state: Shared<'_>,
+    token: String,
+    options: Option<AddOptions>,
+) -> Result<String, String> {
+    let pending = state
+        .take_pending(&token)
+        .ok_or_else(|| "this request expired".to_string())?;
+    let opts = options.unwrap_or_default();
+    let start = opts.start != Some(false);
+    let id = state
+        .add_with_session(&app, &pending.url, pending.session, pending.force_video, opts)
+        .await?;
+    if start {
+        state::pump(&app, &state);
+    } else {
+        state::emit_queue(&app, &state);
+    }
+    Ok(id)
+}
+
+/// Drop a parked request the user cancelled.
+#[tauri::command]
+fn cancel_pending(state: Shared<'_>, token: String) {
+    state.take_pending(&token);
+}
+
+/// The folder a download would land in by default, for the add dialog to show.
+#[tauri::command]
+fn get_download_dir(app: AppHandle, state: Shared<'_>) -> Result<String, String> {
+    state.download_dir(&app).map(|p| p.display().to_string())
 }
 
 /// Returns the URLs that were skipped, so the UI can say what did not make it
@@ -207,6 +256,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             add_download,
+            add_pending,
+            cancel_pending,
+            get_download_dir,
             import_urls,
             is_duplicate,
             pause_download,

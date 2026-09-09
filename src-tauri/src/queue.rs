@@ -33,6 +33,10 @@ pub struct Download {
     /// on start and resume. `None` for a plain typed-in URL.
     #[serde(default)]
     pub session: Option<Session>,
+    /// Per-download yt-dlp quality override chosen in the add dialog. Falls
+    /// back to the global setting when `None`.
+    #[serde(default)]
+    pub quality: Option<String>,
 }
 
 impl Download {
@@ -46,6 +50,7 @@ impl Download {
             error: None,
             added_at: now_secs(),
             session: None,
+            quality: None,
             plan,
         }
     }

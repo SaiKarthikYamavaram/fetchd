@@ -20,6 +20,9 @@ export function DetailModal({
     row.status === "downloading" && liveBytes !== undefined ? liveBytes : row.downloaded;
   const total = row.total ?? liveTotal ?? null;
   const percent = total ? Math.min(100, (downloaded / total) * 100) : null;
+  // Slide only when bytes move with an unknown size; a still-resolving
+  // download shows an empty bar instead of fake motion.
+  const indeterminate = percent === null && downloaded > 0;
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -39,8 +42,11 @@ export function DetailModal({
         )}
 
         <div className="modal-progress">
-          <div className={`track ${percent === null ? "indeterminate" : ""}`}>
-            <div className="track-fill" style={{ width: percent === null ? "40%" : `${percent}%` }} />
+          <div className={`track ${indeterminate ? "indeterminate" : ""}`}>
+            <div
+              className="track-fill"
+              style={{ width: indeterminate ? "40%" : `${percent ?? 0}%` }}
+            />
           </div>
           <div className="modal-progress-meta">
             <span>{formatBytes(downloaded)}{total ? ` / ${formatBytes(total)}` : ""}</span>

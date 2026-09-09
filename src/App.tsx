@@ -5,12 +5,14 @@ import {
   formatBytes,
   formatEta,
   type DownloadView,
+  type ConfirmRequest,
   type ProgressRow,
   type Status,
 } from "./lib/api";
 import { SettingsView } from "./components/SettingsView";
 import { DetailModal } from "./components/DetailModal";
 import { ConfirmDelete } from "./components/ConfirmDelete";
+import { AddDialog } from "./components/AddDialog";
 import {
   IconArchive, IconDisc, IconDoc, IconDownload, IconFile,
   IconFolder, IconImage, IconImport, IconMusic, IconOpen, IconPause, IconPlay,
@@ -38,13 +40,16 @@ const STATUS_LABEL: Record<Status, string> = {
 function App() {
   const [rows, setRows] = useState<DownloadView[]>([]);
   const [url, setUrl] = useState("");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [detailId, setDetailId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  // URL awaiting confirmation in the add dialog (location, quality, start).
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  // Set when the extension parked the request; confirming replays its session.
+  const [pendingToken, setPendingToken] = useState<string | null>(null);
 
   // Live bytes arrive far more often than the queue snapshot, so they are kept
   // out of React state and merged at render time.
@@ -54,6 +59,16 @@ function App() {
   const liveTotal = useRef(new Map<string, number>());
   const samples = useRef(new Map<string, Sample>());
   const [, forceRender] = useState(0);
+  // Progress events arrive far faster than the display can paint. Firing a
+  // re-render per event makes the window flicker, so coalesce to one per frame.
+  const frame = useRef<number | null>(null);
+  const scheduleRender = useCallback(() => {
+    if (frame.current !== null) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = null;
+      forceRender((n) => n + 1);
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -66,6 +81,11 @@ function App() {
   useEffect(() => {
     refresh();
     const unlistenQueue = listen<DownloadView[]>("queue://changed", (e) => setRows(e.payload));
+    // The extension can ask the app to confirm a capture before queuing it.
+    const unlistenConfirm = listen<ConfirmRequest>("download://confirm", (e) => {
+      setPendingToken(e.payload.token);
+      setPendingUrl(e.payload.url);
+    });
     const unlistenProgress = listen<ProgressRow>("download://progress", (event) => {
       const { id, downloaded, total } = event.payload;
       live.current.set(id, downloaded);
@@ -81,30 +101,24 @@ function App() {
         }
       }
       samples.current.set(id, { at: now, bytes: downloaded, speed });
-      forceRender((n) => n + 1);
+      scheduleRender();
     });
     return () => {
       unlistenQueue.then((fn) => fn());
+      unlistenConfirm.then((fn) => fn());
       unlistenProgress.then((fn) => fn());
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
     };
-  }, [refresh]);
+  }, [refresh, scheduleRender]);
 
-  async function add(e: React.FormEvent) {
+  function add(e: React.FormEvent) {
     e.preventDefault();
     const value = url.trim();
-    if (!value || busy) return;
-    setBusy(true);
+    if (!value) return;
     setError(null);
     setNotice(null);
-    try {
-      if (await api.isDuplicate(value)) setNotice("Already in the queue — adding again.");
-      await api.addDownload(value);
-      setUrl("");
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+    // Confirm destination and options before anything is queued.
+    setPendingUrl(value);
   }
 
   async function importText() {
@@ -178,10 +192,10 @@ function App() {
             onChange={(e) => setUrl(e.currentTarget.value)}
             placeholder="Paste a link, or send one from the browser extension…"
             spellCheck={false}
-            disabled={busy}
+            autoFocus
           />
-          <button className="add-btn" type="submit" disabled={busy || !url.trim()}>
-            {busy ? <span className="btn-loading"><Spinner size={15} /> Adding</span> : "Add"}
+          <button className="add-btn" type="submit" disabled={!url.trim()}>
+            Add
           </button>
         </form>
 
@@ -234,6 +248,20 @@ function App() {
       {deleteRow && (
         <ConfirmDelete row={deleteRow} onClose={() => setDeleteId(null)} />
       )}
+      {pendingUrl && (
+        <AddDialog
+          url={pendingUrl}
+          token={pendingToken}
+          onClose={() => {
+            setPendingUrl(null);
+            setPendingToken(null);
+          }}
+          onAdded={(msg) => {
+            setUrl("");
+            if (msg) setNotice(msg);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -264,6 +292,10 @@ function Row({
   const percent = total ? Math.min(100, (downloaded / total) * 100) : null;
   const remaining = total ? total - downloaded : 0;
   const eta = row.status === "downloading" && speed > 0 ? formatEta(remaining / speed) : "";
+  // Only slide the placeholder bar when bytes are actually moving with no known
+  // size. While a download is still resolving (yt-dlp probing, nothing
+  // transferred yet) the bar sits at 0 rather than pretending to work.
+  const indeterminate = percent === null && downloaded > 0;
   const running = row.status === "downloading";
   const kind = fileKind(row.filename);
 
@@ -297,8 +329,11 @@ function Row({
         </div>
 
         {row.status !== "completed" && (
-          <div className={`track ${percent === null ? "indeterminate" : ""}`}>
-            <div className="track-fill" style={{ width: percent === null ? "40%" : `${percent}%` }} />
+          <div className={`track ${indeterminate ? "indeterminate" : ""}`}>
+            <div
+              className="track-fill"
+              style={{ width: indeterminate ? "40%" : `${percent ?? 0}%` }}
+            />
           </div>
         )}
 

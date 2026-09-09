@@ -20,6 +20,8 @@ use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
+use crate::throttle::Throttle;
+
 /// Many CDNs reject the default `reqwest/<version>` agent with 403.
 pub const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
                               (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
@@ -741,11 +743,13 @@ pub async fn prepare(
 ///
 /// `progress` carries the starting offsets; build it with `Progress::resumed`
 /// to continue an interrupted transfer, or `Progress::new` to start fresh.
+#[allow(clippy::too_many_arguments)]
 pub async fn run<F>(
     client: &Client,
     segment_client: &Client,
     plan: &DownloadPlan,
     progress: &Progress,
+    throttle: &Throttle,
     token: CancellationToken,
     on_progress: F,
 ) -> Result<PathBuf, String>
@@ -798,6 +802,7 @@ where
         &info,
         plan.ranges.clone(),
         progress,
+        throttle,
         &token,
     )
     .await;
@@ -866,6 +871,7 @@ async fn run_segment(
     path: PathBuf,
     validator: Option<String>,
     done: Arc<SegmentProgress>,
+    throttle: Throttle,
     token: CancellationToken,
 ) -> Result<(), SegErr> {
     let mut attempt = 0usize;
@@ -880,7 +886,7 @@ async fn run_segment(
         }
 
         let before = done.durable();
-        match stream_range(&client, &url, offset, end, &path, &validator, &done, &token).await {
+        match stream_range(&client, &url, offset, end, &path, &validator, &done, &throttle, &token).await {
             Ok(()) => return Ok(()),
             Err(SegErr::Cancelled) => return Err(SegErr::Cancelled),
             Err(SegErr::Fatal(m)) => return Err(SegErr::Fatal(m)),
@@ -925,6 +931,7 @@ async fn stream_range(
     path: &Path,
     validator: &Option<String>,
     done: &Arc<SegmentProgress>,
+    throttle: &Throttle,
     token: &CancellationToken,
 ) -> Result<(), SegErr> {
     let mut request = client
@@ -981,6 +988,13 @@ async fn stream_range(
         let Some(chunk) = next else { break };
         let chunk = chunk.map_err(|e| SegErr::Retryable(format!("transfer failed: {e}")))?;
 
+        // Spend bandwidth budget before writing. Stays cancellable so a pause
+        // does not hang waiting on permits.
+        tokio::select! {
+            _ = token.cancelled() => return Err(SegErr::Cancelled),
+            _ = throttle.take(chunk.len()) => {}
+        }
+
         file.write_all(&chunk)
             .await
             .map_err(|e| SegErr::Fatal(format!("write failed: {e}")))?;
@@ -1017,6 +1031,7 @@ async fn stream_whole(
     url: &Url,
     path: &Path,
     progress: &Progress,
+    throttle: &Throttle,
     token: &CancellationToken,
 ) -> Result<u64, String> {
     let mut attempt = 0usize;
@@ -1025,7 +1040,7 @@ async fn stream_whole(
         // This path always restarts from byte 0, so the counter restarts too.
         progress.reset();
 
-        let result = stream_whole_once(client, url, path, &progress.counter(0), token).await;
+        let result = stream_whole_once(client, url, path, &progress.counter(0), throttle, token).await;
         match result {
             Ok(written) => return Ok(written),
             Err(SegErr::Cancelled) => return Err("cancelled".into()),
@@ -1050,6 +1065,7 @@ async fn stream_whole_once(
     url: &Url,
     path: &Path,
     done: &Arc<SegmentProgress>,
+    throttle: &Throttle,
     token: &CancellationToken,
 ) -> Result<u64, SegErr> {
     let response = client
@@ -1084,6 +1100,11 @@ async fn stream_whole_once(
         let Some(chunk) = next else { break };
         let chunk = chunk.map_err(|e| SegErr::Retryable(format!("transfer failed: {e}")))?;
 
+        tokio::select! {
+            _ = token.cancelled() => return Err(SegErr::Cancelled),
+            _ = throttle.take(chunk.len()) => {}
+        }
+
         file.write_all(&chunk)
             .await
             .map_err(|e| SegErr::Fatal(format!("write failed: {e}")))?;
@@ -1106,6 +1127,7 @@ async fn stream_whole_once(
 
 
 /// Pick a strategy and run it, returning the byte count actually written.
+#[allow(clippy::too_many_arguments)]
 async fn transfer(
     client: &Client,
     segment_client: &Client,
@@ -1114,12 +1136,13 @@ async fn transfer(
     info: &RemoteInfo,
     ranges: Vec<(u64, u64)>,
     progress: &Progress,
+    throttle: &Throttle,
     token: &CancellationToken,
 ) -> Result<u64, String> {
     // No size, no range support, or a file too small to be worth splitting:
     // one connection, streamed to EOF.
     if ranges.len() <= 1 {
-        return stream_whole(client, url, part, progress, token).await;
+        return stream_whole(client, url, part, progress, throttle, token).await;
     }
 
     let total = info.total.expect("ranges implies a known total");
@@ -1159,6 +1182,7 @@ async fn transfer(
             part.to_path_buf(),
             info.validator.clone(),
             progress.counter(i),
+            throttle.clone(),
             segment_token.child_token(),
         ));
         handles.push(handle);
@@ -1194,7 +1218,7 @@ async fn transfer(
         if token.is_cancelled() {
             return Err("cancelled".into());
         }
-        return stream_whole(client, url, part, progress, token).await;
+        return stream_whole(client, url, part, progress, throttle, token).await;
     }
 
     if let Some(err) = first_error {
@@ -1485,7 +1509,7 @@ mod tests {
     {
         let plan = prepare(client, url, dest_dir, segments).await?;
         let progress = Progress::new(plan.segment_count());
-        run(client, segment_client, &plan, &progress, token, on_progress).await
+        run(client, segment_client, &plan, &progress, &Throttle::unlimited(), token, on_progress).await
     }
 
     #[tokio::test]
@@ -1536,6 +1560,7 @@ mod tests {
             &Url::parse(BIG).unwrap(),
             &reference,
             &progress,
+            &Throttle::unlimited(),
             &CancellationToken::new(),
         )
         .await
@@ -1644,7 +1669,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(250)).await;
             killer.cancel();
         });
-        let interrupted = run(&client, &seg, &plan, &progress, token, |_, _| {}).await;
+        let interrupted = run(&client, &seg, &plan, &progress, &Throttle::unlimited(), token, |_, _| {}).await;
         assert!(interrupted.is_err(), "cancelled run must not report success");
 
         // This is all that survives a crash: the durable offsets.
@@ -1655,7 +1680,7 @@ mod tests {
 
         // Resume with a fresh Progress built only from those numbers.
         let resumed = Progress::resumed(&persisted);
-        let path = run(&client, &seg, &plan, &resumed, CancellationToken::new(), |_, _| {})
+        let path = run(&client, &seg, &plan, &resumed, &Throttle::unlimited(), CancellationToken::new(), |_, _| {})
             .await
             .unwrap();
 
@@ -1668,6 +1693,7 @@ mod tests {
             &Url::parse(BIG).unwrap(),
             &reference,
             &fresh,
+            &Throttle::unlimited(),
             &CancellationToken::new(),
         )
         .await

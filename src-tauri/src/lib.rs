@@ -3,13 +3,27 @@ mod download;
 mod queue;
 mod server;
 mod state;
+mod throttle;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager, State, WindowEvent,
+};
 
 use state::{AppState, DownloadView, Settings};
+
+/// Bring the main window back from the tray and focus it.
+fn show_main(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
 
 type Shared<'a> = State<'a, Arc<AppState>>;
 
@@ -104,17 +118,26 @@ fn get_settings(state: Shared<'_>) -> Settings {
     state.settings()
 }
 
+// Async so it runs on the Tokio runtime: `set_settings` rebuilds the bandwidth
+// throttle, which spawns a refill task and would panic off-runtime.
 #[tauri::command]
-fn update_settings(app: AppHandle, state: Shared<'_>, settings: Settings) {
+async fn update_settings(app: AppHandle, state: Shared<'_>, settings: Settings) -> Result<(), ()> {
     state.set_settings(settings);
     state::pump(&app, &state);
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must be registered first: a second launch is intercepted here and
+        // focuses the running window instead of starting another process.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let data_dir = handle.path().app_data_dir()?;
@@ -122,6 +145,35 @@ pub fn run() {
 
             let state = Arc::new(AppState::new(data_dir, config_dir).map_err(std::io::Error::other)?);
             app.manage(Arc::clone(&state));
+
+            // System tray: left-click restores the window; the menu offers an
+            // explicit Show and a real Quit (the window's close button only
+            // hides to tray, so Quit is the one way to actually exit).
+            let show = MenuItem::with_id(app, "show", "Show fetchd", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+
+            TrayIconBuilder::with_id("main-tray")
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("fetchd")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_main(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main(tray.app_handle());
+                    }
+                })
+                .build(app)?;
 
             // Localhost bridge the browser extension POSTs captured sessions to.
             server::start(handle.clone(), Arc::clone(&state));
@@ -131,11 +183,22 @@ pub fn run() {
             // into a retry ladder would burn attempts on a link that is about
             // to work.
             tauri::async_runtime::spawn(async move {
+                // Apply the saved bandwidth cap now that we are on the runtime
+                // (Throttle spawns a refill task).
+                state.rebuild_throttle();
                 tokio::time::sleep(Duration::from_secs(3)).await;
                 state::pump(&handle, &state);
             });
 
             Ok(())
+        })
+        // Close button hides to tray instead of quitting, so downloads keep
+        // running in the background. Quit is via the tray menu.
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             add_download,

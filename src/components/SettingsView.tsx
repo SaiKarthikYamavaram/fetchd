@@ -67,6 +67,19 @@ export function SettingsView() {
         </label>
       </div>
 
+      <label className="field">
+        <span>Speed limit (KB/s, 0 = unlimited)</span>
+        <input
+          type="number"
+          min={0}
+          step={50}
+          value={settings.bandwidth_kb}
+          onChange={(e) =>
+            update({ bandwidth_kb: Math.max(0, Number(e.currentTarget.value) || 0) })
+          }
+        />
+      </label>
+
       <hr />
 
       <h3>Sites that block downloaders</h3>

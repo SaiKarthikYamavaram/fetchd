@@ -35,6 +35,7 @@ export type Settings = {
   theme: string;
   cookies_file: string | null;
   user_agent: string | null;
+  bandwidth_kb: number;
 };
 
 export type ProgressRow = {

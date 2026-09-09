@@ -14,11 +14,13 @@ use std::sync::{Arc, Mutex};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 use tokio_util::sync::CancellationToken;
 
 use crate::cookies;
 use crate::download::{self, Progress, Session};
 use crate::queue::{self, Download, Status};
+use crate::throttle::Throttle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -35,6 +37,10 @@ pub struct Settings {
     /// Must match the browser the cookies came from — a `cf_clearance` cookie
     /// is bound to the exact User-Agent that earned it.
     pub user_agent: Option<String>,
+    /// Aggregate download speed cap in KB/s across all transfers. 0 or absent
+    /// means unlimited.
+    #[serde(default)]
+    pub bandwidth_kb: u64,
 }
 
 impl Default for Settings {
@@ -46,6 +52,7 @@ impl Default for Settings {
             theme: "system".into(),
             cookies_file: None,
             user_agent: None,
+            bandwidth_kb: 0,
         }
     }
 }
@@ -99,6 +106,8 @@ pub struct AppState {
     next_id: AtomicU64,
     /// Monotonic run counter; see `Active::gen`.
     gen: AtomicU64,
+    /// Shared bandwidth limiter; rebuilt when the cap setting changes.
+    throttle: Mutex<Throttle>,
     data_dir: PathBuf,
     config_dir: PathBuf,
 }
@@ -128,6 +137,10 @@ impl AppState {
             settings: Mutex::new(settings),
             next_id: AtomicU64::new(next + 1),
             gen: AtomicU64::new(1),
+            // Built unlimited here (this runs off the async runtime, and
+            // Throttle spawns a task); `rebuild_throttle` applies the saved cap
+            // from a runtime context during setup.
+            throttle: Mutex::new(Throttle::unlimited()),
             data_dir,
             config_dir,
         })
@@ -177,6 +190,19 @@ impl AppState {
     pub fn set_settings(&self, settings: Settings) {
         *self.settings.lock().unwrap() = settings;
         self.save_settings();
+        self.rebuild_throttle();
+    }
+
+    /// Rebuild the shared limiter from the current bandwidth setting. Must be
+    /// called from within the async runtime — `Throttle::new` spawns a refill
+    /// task. A cap of 0 yields an unlimited (zero-overhead) throttle.
+    pub fn rebuild_throttle(&self) {
+        let kb = self.settings().bandwidth_kb;
+        *self.throttle.lock().unwrap() = Throttle::new(kb);
+    }
+
+    fn current_throttle(&self) -> Throttle {
+        self.throttle.lock().unwrap().clone()
     }
 
     pub fn download_dir(&self, app: &AppHandle) -> Result<PathBuf, String> {
@@ -494,6 +520,11 @@ fn spawn_transfer(app: AppHandle, state: Arc<AppState>, entry: Download) {
             }
         };
 
+        // Snapshot the shared limiter for this run. A later cap change rebuilds
+        // the throttle; in-flight transfers keep the one they started with,
+        // which is fine — the next resume picks up the new cap.
+        let throttle = state.current_throttle();
+
         let emitter = app.clone();
         let row_id = id.clone();
         let result = download::run(
@@ -501,6 +532,7 @@ fn spawn_transfer(app: AppHandle, state: Arc<AppState>, entry: Download) {
             &segment_client,
             &plan,
             &progress,
+            &throttle,
             token.clone(),
             move |downloaded, total| {
                 let _ = emitter.emit(
@@ -534,7 +566,10 @@ fn spawn_transfer(app: AppHandle, state: Arc<AppState>, entry: Download) {
         state.record_progress(&id, progress.snapshot());
 
         match result {
-            Ok(_) => state.set_status(&id, Status::Completed, None),
+            Ok(_) => {
+                state.set_status(&id, Status::Completed, None);
+                notify_complete(&app, &entry.filename());
+            }
             Err(e) if token.is_cancelled() => {
                 // A cancelled transfer was paused or removed; whichever
                 // command did it already set the right status.
@@ -553,6 +588,24 @@ fn spawn_transfer(app: AppHandle, state: Arc<AppState>, entry: Download) {
 
 pub fn emit_queue(app: &AppHandle, state: &Arc<AppState>) {
     let _ = app.emit("queue://changed", state.views());
+}
+
+/// Notify only when the window is hidden/minimized — a visible window already
+/// shows the row flip to Completed, so a notification then would be noise.
+fn notify_complete(app: &AppHandle, filename: &str) {
+    let hidden = app
+        .get_webview_window("main")
+        .map(|w| !w.is_visible().unwrap_or(true))
+        .unwrap_or(true);
+    if !hidden {
+        return;
+    }
+    let _ = app
+        .notification()
+        .builder()
+        .title("Download complete")
+        .body(format!("{filename} finished downloading."))
+        .show();
 }
 
 #[cfg(test)]

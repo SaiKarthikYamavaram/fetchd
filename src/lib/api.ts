@@ -26,6 +26,8 @@ export type DownloadView = {
   user_agent: string | null;
   referer: string | null;
   has_cookie: boolean;
+  thumbnail: string | null;
+  engine: string;
 };
 
 export type Settings = {

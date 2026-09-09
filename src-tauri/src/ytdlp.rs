@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -53,6 +54,39 @@ pub struct Tick {
     pub total: Option<u64>,
 }
 
+/// Resolve a video's title and thumbnail URL without downloading, so the row
+/// can show the real name and a preview immediately. Best-effort: any failure
+/// or a slow site returns `(None, None)` and the download still proceeds.
+pub async fn resolve_meta(ytdlp: &str, url: &str, cookies: &Cookies) -> (Option<String>, Option<String>) {
+    let mut cmd = Command::new(ytdlp);
+    cmd.arg("--skip-download")
+        .arg("--no-playlist")
+        .arg("--no-warnings")
+        .arg("-O")
+        .arg("%(title)s|||%(thumbnail)s");
+    match (&cookies.file, &cookies.browser) {
+        (Some(path), _) => { cmd.arg("--cookies").arg(path); }
+        (None, Some(b)) if !b.is_empty() => { cmd.arg("--cookies-from-browser").arg(b); }
+        _ => {}
+    }
+    cmd.arg(url).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+
+    let out = match tokio::time::timeout(Duration::from_secs(15), cmd.output()).await {
+        Ok(Ok(o)) if o.status.success() => o,
+        _ => return (None, None),
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let (title, thumb) = line.split_once("|||").unwrap_or((line, ""));
+
+    let clean = |s: &str| {
+        let s = s.trim();
+        if s.is_empty() || s == "NA" { None } else { Some(s.to_string()) }
+    };
+    let thumb = clean(thumb).filter(|u| u.starts_with("http"));
+    (clean(title), thumb)
+}
+
 /// Format-selection args for a quality choice: "best" (default), a max height
 /// like "1080", or "audio" (extract to mp3).
 ///
@@ -74,8 +108,11 @@ fn format_args(quality: &str) -> Vec<String> {
 }
 
 /// Run yt-dlp for `url`, saving into `dir`. Returns the final file path.
+///
+/// `on_file` fires as soon as yt-dlp names an output (well before completion),
+/// so the UI can replace the "…video" placeholder with the real title.
 #[allow(clippy::too_many_arguments)]
-pub async fn run<F>(
+pub async fn run<F, G>(
     ytdlp: &str,
     url: &str,
     dir: &Path,
@@ -83,9 +120,11 @@ pub async fn run<F>(
     quality: &str,
     token: CancellationToken,
     on_progress: F,
+    on_file: G,
 ) -> Result<PathBuf, String>
 where
     F: Fn(Tick) + Send + 'static,
+    G: Fn(&Path) + Send + 'static,
 {
     tokio::fs::create_dir_all(dir)
         .await
@@ -166,8 +205,10 @@ where
                                 on_progress(tick);
                             }
                         } else if let Some(p) = parse_destination(&line) {
+                            on_file(&p);
                             destination = Some(p);
                         } else if let Some(p) = parse_final(&line) {
+                            on_file(&p);
                             merged = Some(p);
                         }
                     }

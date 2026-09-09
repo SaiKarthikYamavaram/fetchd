@@ -98,9 +98,14 @@ function filenameFromDisposition(disposition) {
   return plain ? plain[1].trim() : null;
 }
 
-// Clear a tab's list when it navigates to a new page.
-chrome.tabs.onUpdated.addListener((tabId, info) => {
+// Clear a tab's list when it navigates to a new page; flag video pages so the
+// toolbar shows a cue even though adaptive streams are never header-detected.
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status === "loading" && info.url) clearDetected(tabId);
+  if (info.status === "complete" && tab && tab.url && isVideoSite(tab.url)) {
+    chrome.action.setBadgeText({ tabId, text: "▶" });
+    chrome.action.setBadgeBackgroundColor({ tabId, color: "#ef4444" });
+  }
 });
 chrome.tabs.onRemoved.addListener((tabId) => clearDetected(tabId));
 
@@ -138,7 +143,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     // Prefer an explicit link/media target; otherwise the page URL itself
     // (yt-dlp resolves the video from a watch page).
     const url = info.linkUrl || info.srcUrl || info.pageUrl || (tab && tab.url);
-    if (url) await sendOne(url, referer, true);
+    if (url) await sendOne(url, referer, true, videoTitle(tab && tab.title));
   } else if (info.menuItemId === "fetchd-all-links") {
     await grabFromPage(tab, "links", referer);
   } else if (info.menuItemId === "fetchd-all-images") {
@@ -219,7 +224,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "getDetected") {
       sendResponse({ items: await getDetected(msg.tabId), alive: await fetchdAlive() });
     } else if (msg.type === "download") {
-      sendResponse({ ok: await sendToFetchd(msg.url, msg.referer) });
+      sendResponse({ ok: await sendToFetchd(msg.url, msg.referer, msg.video || false) });
     } else if (msg.type === "downloadAll") {
       const items = await getDetected(msg.tabId);
       let ok = 0;
@@ -233,10 +238,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true; // async response
 });
 
-async function sendOne(url, referer, video = false) {
+async function sendOne(url, referer, video = false, name = null) {
   const ok = await sendToFetchd(url, referer, video);
+  const label = video ? (name || "Video") : filenameFromUrl(url);
   notify(ok ? "Sent to fetchd" : "fetchd not reachable",
-         ok ? (video ? "Video queued" : filenameFromUrl(url)) : "Start the fetchd app and try again.");
+         ok ? label : "Start the fetchd app and try again.");
 }
 
 function notify(title, message) {

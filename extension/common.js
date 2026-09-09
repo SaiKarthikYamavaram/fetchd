@@ -57,6 +57,32 @@ function hostOf(url) {
   try { return new URL(url).hostname; } catch { return ""; }
 }
 
+// Sites whose videos are adaptive streams (DASH/HLS) that header-detection
+// cannot surface as a file — they go through the yt-dlp engine instead. Kept in
+// sync with VIDEO_HOSTS in src-tauri/src/ytdlp.rs.
+const VIDEO_HOSTS = [
+  "youtube.com", "youtu.be", "m.youtube.com", "music.youtube.com",
+  "vimeo.com", "dailymotion.com", "twitch.tv", "clips.twitch.tv",
+  "tiktok.com", "instagram.com", "facebook.com", "fb.watch",
+  "twitter.com", "x.com", "reddit.com", "soundcloud.com",
+  "bilibili.com", "nicovideo.jp", "streamable.com",
+];
+
+function isVideoSite(url) {
+  const h = hostOf(url).toLowerCase();
+  return VIDEO_HOSTS.some((d) => h === d || h.endsWith(`.${d}`));
+}
+
+// Clean a browser tab title into a video name: strip the trailing site suffix
+// ("… - YouTube", "… on Vimeo") and a leading unread-count badge ("(3) …").
+function videoTitle(tabTitle) {
+  if (!tabTitle) return null;
+  let t = tabTitle.replace(/^\(\d+\)\s*/, "");
+  t = t.replace(/\s*[-|]\s*(YouTube|Vimeo|Dailymotion|Twitch|TikTok|Reddit|SoundCloud|Bilibili)\s*$/i, "");
+  t = t.replace(/\s+on Vimeo$/i, "");
+  return t.trim() || null;
+}
+
 function isExcluded(url, settings) {
   const host = hostOf(url);
   return settings.excludeDomains.some((d) => host === d || host.endsWith(`.${d}`));

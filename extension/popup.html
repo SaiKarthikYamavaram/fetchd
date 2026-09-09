@@ -30,6 +30,10 @@
         border-radius: 8px; font-size: 10px; font-weight: 700; text-transform: uppercase;
         color: #6366f1; background: rgba(99,102,241,0.14);
       }
+      .popthumb {
+        flex-shrink: 0; width: 56px; height: 34px; object-fit: cover;
+        border-radius: 6px; background: rgba(128,128,128,0.2);
+      }
       .meta { flex: 1; min-width: 0; }
       .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
       .sub { font-size: 11px; color: #8b909c; }
@@ -55,6 +59,18 @@
       <span class="title">fetchd</span>
       <span class="status"><span id="dot" class="dot"></span><span id="statusText">Checking…</span></span>
     </header>
+
+    <div class="section" id="videoSection" hidden>
+      <div class="item">
+        <img id="videoThumb" class="popthumb" alt="" hidden />
+        <span class="tag" id="videoTag" style="color:#ef4444;background:rgba(239,68,68,0.14)">VID</span>
+        <div class="meta">
+          <div class="name" id="videoName">This page's video</div>
+          <div class="sub">download with yt-dlp (quality set in the app)</div>
+        </div>
+        <button class="dl primary" id="downloadVideo">Download</button>
+      </div>
+    </div>
 
     <div class="section">
       <div id="empty" class="muted" hidden>No downloadable media detected on this page.</div>

@@ -94,6 +94,9 @@ pub struct DownloadView {
     pub user_agent: Option<String>,
     pub referer: Option<String>,
     pub has_cookie: bool,
+    /// Remote thumbnail URL for a preview, if any.
+    pub thumbnail: Option<String>,
+    pub engine: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -266,6 +269,11 @@ impl AppState {
                 user_agent: d.session.as_ref().map(|s| s.user_agent.clone()),
                 referer: d.session.as_ref().and_then(|s| s.referer.clone()),
                 has_cookie: d.session.as_ref().is_some_and(|s| s.cookie.is_some()),
+                thumbnail: d.plan.thumbnail.clone(),
+                engine: match d.plan.engine {
+                    download::Engine::YtDlp => "ytdlp".into(),
+                    download::Engine::Http => "http".into(),
+                },
             })
             .collect()
     }
@@ -290,6 +298,27 @@ impl AppState {
         let mut queue = self.queue.lock().unwrap();
         if let Some(d) = queue.iter_mut().find(|d| d.id == id) {
             d.done = done;
+        }
+    }
+
+    /// Update only the displayed name (keeping the directory) while a yt-dlp
+    /// download is still running, so the row shows the real title instead of the
+    /// "…video" placeholder before it finishes.
+    fn set_display_name(&self, id: &str, name: &str) {
+        let changed = {
+            let mut queue = self.queue.lock().unwrap();
+            match queue.iter_mut().find(|d| d.id == id) {
+                Some(d) => {
+                    let next = d.plan.final_path.with_file_name(name);
+                    let changed = d.plan.final_path != next;
+                    d.plan.final_path = next;
+                    changed
+                }
+                None => false,
+            }
+        };
+        if changed {
+            self.save_queue();
         }
     }
 
@@ -343,10 +372,23 @@ impl AppState {
         force_video: bool,
     ) -> Result<String, String> {
         let dir = self.download_dir(app)?;
-        let segments = self.settings().segments;
-        let session = self.session_for(url, captured);
-        let (client, _) = self.clients_for(&session)?;
-        let plan = download::prepare(&client, url, &dir, segments, force_video).await?;
+        let settings = self.settings();
+        let session = self.session_for(url, captured.clone());
+
+        let plan = if force_video || crate::ytdlp::is_video_site(url) {
+            // Resolve title + thumbnail up front (with a timeout) so the row
+            // shows the real name and a preview immediately, not a placeholder.
+            let ytdlp = if settings.ytdlp_path.is_empty() { "yt-dlp".to_string() } else { settings.ytdlp_path.clone() };
+            let cookies = crate::ytdlp::Cookies {
+                file: settings.cookies_file.clone(),
+                browser: if settings.cookies_browser.is_empty() { None } else { Some(settings.cookies_browser.clone()) },
+            };
+            let (title, thumbnail) = crate::ytdlp::resolve_meta(&ytdlp, url, &cookies).await;
+            download::video_plan(url, &dir, title, thumbnail)?
+        } else {
+            let (client, _) = self.clients_for(&session)?;
+            download::prepare(&client, url, &dir, settings.segments).await?
+        };
 
         let id = self.next_id();
         let mut entry = Download::new(id.clone(), plan);
@@ -668,17 +710,79 @@ async fn run_video(
 
     let emitter = app.clone();
     let row_id = id.to_string();
-    crate::ytdlp::run(&ytdlp, &plan.url, &dir, &cookies, &quality, token, move |t| {
-        let _ = emitter.emit(
-            "download://progress",
-            ProgressRow { id: row_id.clone(), downloaded: t.downloaded, total: t.total },
-        );
-    })
+
+    // Update the row's title as soon as yt-dlp names a file.
+    let name_app = app.clone();
+    let name_state = Arc::clone(state);
+    let name_id = id.to_string();
+    let on_file = move |path: &std::path::Path| {
+        if let Some(name) = display_name(path) {
+            name_state.set_display_name(&name_id, &name);
+            emit_queue(&name_app, &name_state);
+        }
+    };
+
+    crate::ytdlp::run(
+        &ytdlp,
+        &plan.url,
+        &dir,
+        &cookies,
+        &quality,
+        token,
+        move |t| {
+            let _ = emitter.emit(
+                "download://progress",
+                ProgressRow { id: row_id.clone(), downloaded: t.downloaded, total: t.total },
+            );
+        },
+        on_file,
+    )
     .await
 }
 
 pub fn emit_queue(app: &AppHandle, state: &Arc<AppState>) {
     let _ = app.emit("queue://changed", state.views());
+}
+
+/// Turn a yt-dlp intermediate path into a clean display name: drop a trailing
+/// `.part`, and the per-stream `.fNNN` format tag (e.g.
+/// `Title [id].f398.mp4.part` → `Title [id].mp4`).
+fn display_name(path: &std::path::Path) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy();
+    let name = name.strip_suffix(".part").unwrap_or(&name);
+    let parts: Vec<&str> = name
+        .split('.')
+        .filter(|seg| !(seg.len() >= 2 && seg.starts_with('f') && seg[1..].chars().all(|c| c.is_ascii_digit())))
+        .collect();
+    let cleaned = parts.join(".");
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::display_name;
+    use std::path::Path;
+
+    #[test]
+    fn cleans_ytdlp_intermediate_names() {
+        assert_eq!(
+            display_name(Path::new("/d/Big Buck Bunny [id].f398.mp4.part")).as_deref(),
+            Some("Big Buck Bunny [id].mp4")
+        );
+        assert_eq!(
+            display_name(Path::new("/d/Song [id].mp3")).as_deref(),
+            Some("Song [id].mp3")
+        );
+        // No false-positive on a normal name component.
+        assert_eq!(
+            display_name(Path::new("/d/final.mkv")).as_deref(),
+            Some("final.mkv")
+        );
+    }
 }
 
 /// Notify only when the window is hidden/minimized — a visible window already
@@ -726,6 +830,7 @@ mod tests {
             validator: None,
             ranges: vec![(0, 999)],
             engine: crate::download::Engine::Http,
+            thumbnail: None,
         };
         state.queue.lock().unwrap().push(Download::new(id.into(), plan));
     }
@@ -801,6 +906,7 @@ mod tests {
             validator: None,
             ranges: vec![],
             engine: crate::download::Engine::Http,
+            thumbnail: None,
         };
         state.queue.lock().unwrap().push(Download::new("k".into(), plan));
 
@@ -819,6 +925,7 @@ mod tests {
             validator: None,
             ranges: vec![],
             engine: crate::download::Engine::Http,
+            thumbnail: None,
         };
         state.queue.lock().unwrap().push(Download::new("k2".into(), plan2));
         state.remove("k2", true);

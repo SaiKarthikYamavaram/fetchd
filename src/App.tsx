@@ -268,7 +268,17 @@ function Row({
 
   return (
     <div className={`row ${row.status}`}>
-      {running && percent !== null ? (
+      {row.thumbnail ? (
+        // Video preview thumbnail; overlay a small ring while downloading.
+        <span className="thumb">
+          <img src={row.thumbnail} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.display = "none")} />
+          {running && percent !== null && (
+            <span className="thumb-ring" style={{ ["--p" as string]: percent }}>
+              <span className="ring-num">{Math.round(percent)}</span>
+            </span>
+          )}
+        </span>
+      ) : running && percent !== null ? (
         <span className="type ring" style={{ ["--p" as string]: percent }}>
           <span className="ring-num">{Math.round(percent)}</span>
         </span>

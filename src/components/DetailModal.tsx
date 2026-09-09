@@ -26,6 +26,15 @@ export function DetailModal({
           <button className="act" onClick={onClose} title="Close"><IconX /></button>
         </div>
 
+        {row.thumbnail && (
+          <img
+            className="modal-thumb"
+            src={row.thumbnail}
+            alt=""
+            onError={(e) => (e.currentTarget.style.display = "none")}
+          />
+        )}
+
         <div className="modal-progress">
           <div className={`track ${percent === null ? "indeterminate" : ""}`}>
             <div className="track-fill" style={{ width: percent === null ? "40%" : `${percent}%` }} />

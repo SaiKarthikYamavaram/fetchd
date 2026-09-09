@@ -6,9 +6,18 @@ function fmtSize(n) {
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
 }
 
+// Short, clear type labels for the tag chip.
+const TYPE_LABEL = {
+  video: "VID", audio: "AUD", archive: "ZIP",
+  document: "DOC", image: "IMG", other: "BIN",
+};
+
 const listEl = document.getElementById("list");
 const emptyEl = document.getElementById("empty");
 const allBar = document.getElementById("allBar");
+
+// A video card counts as content, so the "nothing detected" line must not show.
+let hasVideo = false;
 const dot = document.getElementById("dot");
 const statusText = document.getElementById("statusText");
 
@@ -24,6 +33,43 @@ async function init() {
 
   render(items || []);
 
+  // Known video site → offer a direct yt-dlp download of the page itself,
+  // since adaptive streams never appear as a detectable file.
+  if (isVideoSite(referer)) {
+    hasVideo = true;
+    document.getElementById("videoSection").hidden = false;
+    emptyEl.hidden = true;
+    const title = videoTitle(tab.title);
+    if (title) {
+      document.getElementById("videoName").textContent = title;
+    }
+    // Pull the page's og:image for a preview thumbnail.
+    try {
+      const [res] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () =>
+          document.querySelector('meta[property="og:image"]')?.content ||
+          document.querySelector('meta[name="twitter:image"]')?.content ||
+          null,
+      });
+      const src = res?.result;
+      if (src) {
+        const img = document.getElementById("videoThumb");
+        img.src = src;
+        img.hidden = false;
+        document.getElementById("videoTag").hidden = true;
+      }
+    } catch {
+      /* page blocked script access; keep the text tag */
+    }
+    document.getElementById("downloadVideo").addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = "Sent";
+      await chrome.runtime.sendMessage({ type: "download", url: referer, referer, video: true });
+    });
+  }
+
   const { settings } = await chrome.storage.local.get("settings");
   document.getElementById("intercept").checked = !!(settings && settings.intercept);
 }
@@ -31,7 +77,7 @@ async function init() {
 function render(items) {
   listEl.innerHTML = "";
   if (!items.length) {
-    emptyEl.hidden = false;
+    emptyEl.hidden = hasVideo; // a video card already fills the popup
     allBar.hidden = true;
     return;
   }
@@ -42,7 +88,7 @@ function render(items) {
     const row = document.createElement("div");
     row.className = "item";
     row.innerHTML = `
-      <span class="tag">${it.type.slice(0, 3)}</span>
+      <span class="tag">${TYPE_LABEL[it.type] || "BIN"}</span>
       <div class="meta">
         <div class="name" title="${escapeAttr(it.url)}">${escapeHtml(it.filename)}</div>
         <div class="sub">${it.type} · ${fmtSize(it.size)}</div>

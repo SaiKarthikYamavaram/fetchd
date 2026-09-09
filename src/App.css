@@ -609,3 +609,28 @@ label { cursor: pointer; }
 .prep { display: inline-flex; align-items: center; gap: 5px; }
 
 .act-sep { width: 1px; height: 18px; margin: 0 3px; background: var(--border); flex-shrink: 0; }
+
+/* Video preview thumbnail (replaces the type tile when present). */
+.thumb {
+  position: relative;
+  flex-shrink: 0;
+  width: 64px; height: 40px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb-ring {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+.thumb-ring .ring-num { color: #fff; font-size: 11px; font-weight: 700; }
+
+.modal-thumb {
+  width: 100%; max-height: 240px; object-fit: cover;
+  border-radius: 10px; margin-bottom: 14px; display: block;
+  background: var(--surface-2);
+}

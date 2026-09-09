@@ -82,12 +82,18 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
                         let _ = request.respond(cors(Response::from_string("bad body").with_status_code(400)));
                         continue;
                     }
-                    let reply = handle_add(&app, &state, &body);
-                    let response = match reply {
-                        Ok(id) => cors(Response::from_string(id)),
-                        Err(e) => cors(Response::from_string(e).with_status_code(400)),
-                    };
-                    let _ = request.respond(response);
+                    // Handle on its own thread: a video /add blocks on a
+                    // ~15s yt-dlp metadata probe, and the accept loop must stay
+                    // free to answer /ping and other requests meanwhile.
+                    let app = app.clone();
+                    let state = Arc::clone(&state);
+                    std::thread::spawn(move || {
+                        let response = match handle_add(&app, &state, &body) {
+                            Ok(id) => cors(Response::from_string(id)),
+                            Err(e) => cors(Response::from_string(e).with_status_code(400)),
+                        };
+                        let _ = request.respond(response);
+                    });
                 }
                 _ => {
                     let _ = request.respond(cors(Response::empty(404)));

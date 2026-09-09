@@ -25,7 +25,12 @@ let tab, referer;
 
 async function init() {
   [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  referer = tab?.url || "";
+  if (!tab) {
+    dot.className = "dot down";
+    statusText.textContent = "No active tab";
+    return;
+  }
+  referer = tab.url || "";
 
   const { items, alive } = await chrome.runtime.sendMessage({ type: "getDetected", tabId: tab.id });
   dot.className = `dot ${alive ? "up" : "down"}`;

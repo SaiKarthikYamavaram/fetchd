@@ -1,22 +1,54 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type Settings } from "../lib/api";
 
 export function SettingsView() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [saved, setSaved] = useState(false);
+  const debounceTimer = useRef<number | null>(null);
+  const latestSettings = useRef<Settings | null>(null);
 
   useEffect(() => {
-    api.getSettings().then(setSettings);
+    api.getSettings().then((s) => {
+      setSettings(s);
+      latestSettings.current = s;
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimer.current && latestSettings.current) {
+        window.clearTimeout(debounceTimer.current);
+        api.updateSettings(latestSettings.current);
+      }
+    };
   }, []);
 
   if (!settings) return null;
 
-  function update(patch: Partial<Settings>) {
-    const next = { ...settings!, ...patch };
-    setSettings(next);
+  function commit(next: Settings) {
     api.updateSettings(next);
     setSaved(true);
     window.setTimeout(() => setSaved(false), 1200);
+  }
+
+  function update(patch: Partial<Settings>, immediate = false) {
+    const next = { ...settings!, ...patch };
+    setSettings(next);
+    latestSettings.current = next;
+
+    if (debounceTimer.current) {
+      window.clearTimeout(debounceTimer.current);
+      debounceTimer.current = null;
+    }
+
+    if (immediate) {
+      commit(next);
+    } else {
+      debounceTimer.current = window.setTimeout(() => {
+        commit(next);
+        debounceTimer.current = null;
+      }, 400);
+    }
   }
 
   return (
@@ -135,7 +167,7 @@ export function SettingsView() {
         <span>Quality</span>
         <select
           value={settings.video_quality || "best"}
-          onChange={(e) => update({ video_quality: e.currentTarget.value })}
+          onChange={(e) => update({ video_quality: e.currentTarget.value }, true)}
         >
           <option value="best">Best available</option>
           <option value="2160">2160p (4K)</option>

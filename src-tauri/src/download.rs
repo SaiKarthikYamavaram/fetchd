@@ -596,6 +596,13 @@ impl SegmentProgress {
         self.live.fetch_add(n, Ordering::Relaxed);
     }
 
+    /// Set both counters to an absolute value. Used by the yt-dlp path, which
+    /// reports cumulative downloaded bytes rather than deltas.
+    fn set(&self, n: u64) {
+        self.live.store(n, Ordering::Relaxed);
+        self.durable.store(n, Ordering::Relaxed);
+    }
+
     /// Call only after the write is on the device.
     fn commit(&self) {
         self.durable.store(self.live.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -653,6 +660,11 @@ impl Progress {
 
     fn counter(&self, i: usize) -> Arc<SegmentProgress> {
         Arc::clone(&self.counters[i])
+    }
+
+    /// Set the first counter to an absolute byte count (yt-dlp path).
+    pub fn set_absolute(&self, n: u64) {
+        self.counters[0].set(n);
     }
 
     /// What the user sees.
@@ -734,8 +746,8 @@ pub fn video_plan(
         .unwrap_or_else(|| format!("{host} video"));
     Ok(DownloadPlan {
         url: parsed.to_string(),
-        final_path: dest_dir.join(name),
-        part_path: dest_dir.to_path_buf(),
+        final_path: dest_dir.join(&name),
+        part_path: dest_dir.join(format!("{name}.part")),
         total: None,
         supports_ranges: false,
         validator: None,

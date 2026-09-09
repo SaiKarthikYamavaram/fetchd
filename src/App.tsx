@@ -226,6 +226,7 @@ function App() {
         <DetailModal
           row={detailRow}
           liveBytes={live.current.get(detailRow.id)}
+          liveTotal={liveTotal.current.get(detailRow.id)}
           speed={samples.current.get(detailRow.id)?.speed ?? 0}
           onClose={() => setDetailId(null)}
         />

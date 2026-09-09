@@ -13,6 +13,7 @@ use tokio::sync::Semaphore;
 
 const REFILL_MS: u64 = 100;
 const SLICE: usize = 16 * 1024;
+const MAX_SLICE: usize = 256 * 1024;
 
 struct Inner {
     sem: Semaphore,
@@ -45,7 +46,10 @@ impl Throttle {
 
         let per_tick = ((kb_per_sec * 1024) / (1000 / REFILL_MS)) as usize;
         let per_tick = per_tick.max(1);
-        let slice = SLICE.min(per_tick).max(1);
+        // Scale the acquire slice with the cap so a high limit doesn't force
+        // dozens of tiny semaphore acquisitions per network chunk, while never
+        // exceeding a single tick's budget (which would deadlock a low cap).
+        let slice = (per_tick / 4).clamp(SLICE, MAX_SLICE).min(per_tick).max(1);
         let cap = (per_tick * 2).max(slice);
 
         let inner = Arc::new(Inner {

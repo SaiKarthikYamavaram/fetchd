@@ -6,17 +6,20 @@ import { IconOpen, IconFolder, IconCopy, IconX } from "./icons";
 export function DetailModal({
   row,
   liveBytes,
+  liveTotal,
   speed,
   onClose,
 }: {
   row: DownloadView;
   liveBytes?: number;
+  liveTotal?: number;
   speed: number;
   onClose: () => void;
 }) {
   const downloaded =
     row.status === "downloading" && liveBytes !== undefined ? liveBytes : row.downloaded;
-  const percent = row.total ? Math.min(100, (downloaded / row.total) * 100) : null;
+  const total = row.total ?? liveTotal ?? null;
+  const percent = total ? Math.min(100, (downloaded / total) * 100) : null;
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -40,7 +43,7 @@ export function DetailModal({
             <div className="track-fill" style={{ width: percent === null ? "40%" : `${percent}%` }} />
           </div>
           <div className="modal-progress-meta">
-            <span>{formatBytes(downloaded)}{row.total ? ` / ${formatBytes(row.total)}` : ""}</span>
+            <span>{formatBytes(downloaded)}{total ? ` / ${formatBytes(total)}` : ""}</span>
             <span>{percent !== null ? `${percent.toFixed(1)}%` : "size unknown"}</span>
             {row.status === "downloading" && <span className="rate-tag">{formatBytes(speed)}/s</span>}
           </div>
@@ -50,13 +53,15 @@ export function DetailModal({
           <Field label="Status" value={cap(row.status)} />
           <Field label="Saved to" value={row.path} mono copyable />
           <Field label="Source URL" value={row.url} mono copyable />
-          <Field label="Size" value={row.total !== null ? formatBytes(row.total) : "unknown"} />
+          <Field label="Size" value={total !== null ? formatBytes(total) : "unknown"} />
           <Field
             label="Connections"
             value={
-              row.supports_ranges
-                ? `${row.segments} (server supports byte ranges)`
-                : "1 (server has no range support)"
+              row.engine === "ytdlp"
+                ? "yt-dlp engine"
+                : row.supports_ranges
+                  ? `${row.segments} (server supports byte ranges)`
+                  : "1 (server has no range support)"
             }
           />
           <Field label="Added" value={formatDate(row.added_at)} />

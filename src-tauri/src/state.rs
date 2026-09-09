@@ -326,7 +326,13 @@ impl AppState {
     /// known after resolution), and record the final size from disk so the
     /// completed row shows a real size instead of "unknown".
     fn set_final_path(&self, id: &str, path: PathBuf) {
-        let size = std::fs::metadata(&path).ok().map(|m| m.len());
+        // Only a real file has a meaningful length. If yt-dlp errored before
+        // naming an output, `path` falls back to the directory, whose metadata
+        // len() is the inode block size (4096) — never record that as the size.
+        let size = std::fs::metadata(&path)
+            .ok()
+            .filter(|m| m.is_file())
+            .map(|m| m.len());
         let mut queue = self.queue.lock().unwrap();
         if let Some(d) = queue.iter_mut().find(|d| d.id == id) {
             d.plan.final_path = path;
@@ -336,6 +342,27 @@ impl AppState {
                 // here or the completed row would read 0 / total.
                 d.done = vec![size];
             }
+        }
+    }
+
+    /// Record the total size once yt-dlp reports it, never shrinking (yt-dlp's
+    /// per-phase totals would otherwise flip video→audio size).
+    fn set_total(&self, id: &str, total: u64) {
+        let changed = {
+            let mut queue = self.queue.lock().unwrap();
+            if let Some(d) = queue.iter_mut().find(|d| d.id == id) {
+                if d.plan.total.is_none_or(|t| total > t) {
+                    d.plan.total = Some(total);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.save_queue();
         }
     }
 
@@ -411,11 +438,11 @@ impl AppState {
         self.save_queue();
     }
 
-    /// Stop and discard: the partial file is deleted and the entry removed.
+    /// Stop and discard: the partial file(s) are deleted and the entry removed.
     pub fn cancel(&self, id: &str) {
-        let part = {
+        let plan = {
             let queue = self.queue.lock().unwrap();
-            queue.iter().find(|d| d.id == id).map(|d| d.plan.part_path.clone())
+            queue.iter().find(|d| d.id == id).map(|d| d.plan.clone())
         };
 
         if let Some(active) = self.active.lock().unwrap().remove(id) {
@@ -423,8 +450,8 @@ impl AppState {
         }
         self.queue.lock().unwrap().retain(|d| d.id != id);
 
-        if let Some(part) = part {
-            let _ = std::fs::remove_file(part);
+        if let Some(plan) = plan {
+            delete_artifacts(&plan, true);
         }
         self.save_queue();
     }
@@ -438,12 +465,9 @@ impl AppState {
     /// file (and any leftover `.part`) from disk; otherwise the file is left in
     /// place and only the list entry goes.
     pub fn remove(&self, id: &str, delete_file: bool) {
-        let paths = {
+        let plan = {
             let queue = self.queue.lock().unwrap();
-            queue
-                .iter()
-                .find(|d| d.id == id)
-                .map(|d| (d.plan.final_path.clone(), d.plan.part_path.clone()))
+            queue.iter().find(|d| d.id == id).map(|d| d.plan.clone())
         };
 
         if let Some(active) = self.active.lock().unwrap().remove(id) {
@@ -452,9 +476,8 @@ impl AppState {
         self.queue.lock().unwrap().retain(|d| d.id != id);
 
         if delete_file {
-            if let Some((final_path, part)) = paths {
-                let _ = std::fs::remove_file(&final_path);
-                let _ = std::fs::remove_file(&part);
+            if let Some(plan) = plan {
+                delete_artifacts(&plan, false);
             }
         }
         self.save_queue();
@@ -472,6 +495,21 @@ impl AppState {
         for id in ids {
             self.pause(&id);
         }
+    }
+
+    /// Clean shutdown on quit: cancel all active transfer tasks, persist their
+    /// latest durable offsets to queue.json, and leave their entries in place so
+    /// `reconcile_on_launch` marks them `Interrupted` and auto-resumes them next time.
+    pub fn shutdown(&self) {
+        let active_entries: Vec<(String, Active)> = {
+            let mut active = self.active.lock().unwrap();
+            active.drain().collect()
+        };
+        for (id, active) in active_entries {
+            active.token.cancel();
+            self.record_progress(&id, active.progress.snapshot());
+        }
+        self.save_queue();
     }
 
     pub fn clear_history(&self) {
@@ -556,7 +594,7 @@ fn spawn_transfer(app: AppHandle, state: Arc<AppState>, entry: Download) {
         let plan = entry.plan.clone();
 
         let result: Result<PathBuf, String> = if plan.engine == download::Engine::YtDlp {
-            run_video(&app, &state, &plan, &id, token.clone()).await
+            run_video(&app, &state, &plan, &progress, &id, token.clone()).await
         } else {
             run_http(&app, &state, &entry, &plan, &progress, &id, token.clone()).await
         };
@@ -683,6 +721,7 @@ async fn run_video(
     app: &AppHandle,
     state: &Arc<AppState>,
     plan: &download::DownloadPlan,
+    progress: &Progress,
     id: &str,
     token: CancellationToken,
 ) -> Result<PathBuf, String> {
@@ -710,6 +749,12 @@ async fn run_video(
 
     let emitter = app.clone();
     let row_id = id.to_string();
+    // Keep the shared progress and plan.total updated from yt-dlp ticks, so a
+    // pause/interrupt records real bytes (not 0) and views() reflects progress
+    // even when queue://changed fires mid-download.
+    let prog = progress.clone();
+    let prog_state = Arc::clone(state);
+    let prog_id = id.to_string();
 
     // Update the row's title as soon as yt-dlp names a file.
     let name_app = app.clone();
@@ -722,14 +767,22 @@ async fn run_video(
         }
     };
 
+    // Honour the global speed cap for video downloads too.
+    let limit_kb = if settings.bandwidth_kb > 0 { Some(settings.bandwidth_kb) } else { None };
+
     crate::ytdlp::run(
         &ytdlp,
         &plan.url,
         &dir,
         &cookies,
         &quality,
+        limit_kb,
         token,
         move |t| {
+            prog.set_absolute(t.downloaded);
+            if let Some(total) = t.total {
+                prog_state.set_total(&prog_id, total);
+            }
             let _ = emitter.emit(
                 "download://progress",
                 ProgressRow { id: row_id.clone(), downloaded: t.downloaded, total: t.total },
@@ -742,6 +795,46 @@ async fn run_video(
 
 pub fn emit_queue(app: &AppHandle, state: &Arc<AppState>) {
     let _ = app.emit("queue://changed", state.views());
+}
+
+/// Delete a download's on-disk files. HTTP has a single `.part` (plus the final
+/// file); yt-dlp leaves several intermediates (`.fNNN.<ext>`, `.part`, `.ytdl`)
+/// which all share the resolved name stem, so those are cleaned by prefix.
+/// `partial_only` (cancel of an unfinished download) skips the final file for
+/// the HTTP path, where it does not exist yet.
+fn delete_artifacts(plan: &download::DownloadPlan, partial_only: bool) {
+    match plan.engine {
+        download::Engine::YtDlp => cleanup_by_stem(&plan.final_path),
+        download::Engine::Http => {
+            let _ = std::fs::remove_file(&plan.part_path);
+            if !partial_only {
+                let _ = std::fs::remove_file(&plan.final_path);
+            }
+        }
+    }
+}
+
+/// Remove every file in `path`'s directory whose name starts with `path`'s file
+/// stem — the set of yt-dlp intermediates for one download. Guarded so a short
+/// or placeholder stem can't sweep unrelated files.
+fn cleanup_by_stem(path: &std::path::Path) {
+    let (Some(dir), Some(stem)) = (path.parent(), path.file_stem()) else {
+        return;
+    };
+    let stem = stem.to_string_lossy();
+    if stem.len() < 4 {
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&*stem)
+                && entry.path().is_file()
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
 }
 
 /// Turn a yt-dlp intermediate path into a clean display name: drop a trailing

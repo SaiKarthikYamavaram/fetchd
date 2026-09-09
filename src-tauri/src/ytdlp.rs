@@ -118,6 +118,7 @@ pub async fn run<F, G>(
     dir: &Path,
     cookies: &Cookies,
     quality: &str,
+    limit_kb: Option<u64>,
     token: CancellationToken,
     on_progress: F,
     on_file: G,
@@ -159,13 +160,25 @@ where
         _ => {}
     }
 
+    if let Some(rate) = limit_kb.filter(|r| *r > 0) {
+        cmd.arg("--limit-rate").arg(format!("{rate}K"));
+    }
+
     cmd.arg(url);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     cmd.kill_on_drop(true);
 
+    // Run yt-dlp in its own process group so cancellation can signal the whole
+    // group — otherwise a spawned ffmpeg (used for merging/remuxing) is
+    // reparented to init and keeps running after we kill yt-dlp.
+    #[cfg(unix)]
+    cmd.process_group(0);
+
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("cannot start yt-dlp: {e} (is it installed?)"))?;
+    #[cfg(unix)]
+    let child_pid = child.id();
 
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
@@ -194,6 +207,11 @@ where
     loop {
         tokio::select! {
             _ = token.cancelled() => {
+                // Kill the whole process group so a spawned ffmpeg dies too.
+                #[cfg(unix)]
+                if let Some(pid) = child_pid {
+                    unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+                }
                 let _ = child.kill().await;
                 return Err("cancelled".into());
             }
@@ -256,9 +274,23 @@ fn parse_final(line: &str) -> Option<PathBuf> {
             return Some(PathBuf::from(&rest[..end]));
         }
     }
-    // [ExtractAudio] Destination: PATH
-    if let Some(p) = line.strip_prefix("[ExtractAudio] Destination: ") {
-        return Some(PathBuf::from(p.trim()));
+    // Other post-processors that produce/rename the final file.
+    for tag in ["[ExtractAudio] ", "[VideoRemuxer] ", "[VideoConvertor] ", "[FixupM3u8] ", "[FixupM4a] "] {
+        if let Some(p) = line.strip_prefix(tag) {
+            // Some emit `Destination: X`, some `Remuxing ... into "X"`, `to "X"`, `Fixing code of "X"`, `Correcting container in "X"`.
+            for needle in ["into \"", "to \"", "of \"", "in \""] {
+                if let Some(i) = p.find(needle) {
+                    let rest = &p[needle.len() + i..];
+                    if let Some(end) = rest.rfind('"') {
+                        return Some(PathBuf::from(&rest[..end]));
+                    }
+                }
+            }
+            let p = p.trim_start_matches("Destination: ").trim();
+            if !p.is_empty() {
+                return Some(PathBuf::from(p));
+            }
+        }
     }
     None
 }
@@ -345,6 +377,18 @@ mod tests {
         assert_eq!(
             parse_final("[ExtractAudio] Destination: /d/Song.mp3").unwrap(),
             PathBuf::from("/d/Song.mp3")
+        );
+        assert_eq!(
+            parse_final("[VideoRemuxer] Remuxing video from \"/d/Video.f137.mp4\" to \"/d/Video.mp4\"").unwrap(),
+            PathBuf::from("/d/Video.mp4")
+        );
+        assert_eq!(
+            parse_final("[FixupM3u8] Fixing code of \"/d/Live.mp4\"").unwrap(),
+            PathBuf::from("/d/Live.mp4")
+        );
+        assert_eq!(
+            parse_final("[FixupM4a] Correcting container in \"/d/Audio.m4a\"").unwrap(),
+            PathBuf::from("/d/Audio.m4a")
         );
         assert!(parse_destination("[download] 5.0% of 10MiB").is_none());
     }

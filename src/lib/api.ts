@@ -87,6 +87,8 @@ export const api = {
   },
   importUrls: (text: string) => invoke<string[]>("import_urls", { text }),
   isDuplicate: (url: string) => invoke<boolean>("is_duplicate", { url }),
+  /// Rename a download's file. Rejected while it is running.
+  rename: (id: string, name: string) => invoke<void>("rename_download", { id, name }),
   pause: (id: string) => invoke<void>("pause_download", { id }),
   resume: (id: string) => invoke<void>("resume_download", { id }),
   cancel: (id: string) => invoke<void>("cancel_download", { id }),

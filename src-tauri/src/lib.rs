@@ -147,6 +147,13 @@ fn remove_download(app: AppHandle, state: Shared<'_>, id: String, delete_file: b
 }
 
 #[tauri::command]
+fn rename_download(app: AppHandle, state: Shared<'_>, id: String, name: String) -> Result<(), String> {
+    state.rename(&id, &name)?;
+    state::emit_queue(&app, &state);
+    Ok(())
+}
+
+#[tauri::command]
 fn pause_all(app: AppHandle, state: Shared<'_>) {
     state.pause_all();
     state::emit_queue(&app, &state);
@@ -301,6 +308,7 @@ pub fn run() {
             cancel_download,
             retry_download,
             remove_download,
+            rename_download,
             pause_all,
             get_queue,
             clear_history,

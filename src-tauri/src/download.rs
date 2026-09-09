@@ -803,7 +803,7 @@ pub fn video_plan(
 /// Give `name` the extension from `fallback` when the user did not type one.
 /// Renaming "report" over "invoice.pdf" should still land a `.pdf`, but a
 /// deliberate "notes.txt" is left exactly as typed.
-fn keep_extension(name: &str, fallback: &str) -> String {
+pub fn keep_extension(name: &str, fallback: &str) -> String {
     if Path::new(name).extension().is_some() {
         return name.to_string();
     }

@@ -570,6 +570,72 @@ impl AppState {
         Ok(id)
     }
 
+    /// Rename an entry's file. The extension is kept when the new name omits
+    /// one, matching the add dialog's "Save as".
+    ///
+    /// A running transfer is refused rather than renamed under itself: its
+    /// segment writers hold the `.part` open at the old path.
+    pub fn rename(&self, id: &str, name: &str) -> Result<(), String> {
+        let name = download::sanitize_filename(name)
+            .ok_or_else(|| "That is not a usable filename.".to_string())?;
+
+        let mut queue = self.queue.lock().unwrap();
+        let entry = queue
+            .iter_mut()
+            .find(|d| d.id == id)
+            .ok_or_else(|| "That download is no longer in the list.".to_string())?;
+
+        if entry.status == Status::Downloading {
+            return Err("Pause the download before renaming it.".into());
+        }
+
+        // yt-dlp keeps its own part files named after the output template
+        // (`<name>.f137.mp4.part`), which this rename does not know about. A
+        // half-finished video would silently restart from zero, so refuse.
+        if entry.plan.engine == download::Engine::YtDlp
+            && entry.status != Status::Completed
+            && entry.downloaded() > 0
+        {
+            return Err("A part-downloaded video cannot be renamed. Rename it once it finishes.".into());
+        }
+
+        let old_final = entry.plan.final_path.clone();
+        let dir = old_final
+            .parent()
+            .ok_or_else(|| "That download has no folder.".to_string())?
+            .to_path_buf();
+        let name = download::keep_extension(&name, &entry.plan.filename());
+        let new_final = dir.join(&name);
+        if new_final == old_final {
+            return Ok(());
+        }
+
+        // Refuse rather than silently pick "name (1)": the user asked for a
+        // specific name, so a clash is worth reporting.
+        let old_part = entry.plan.part_path.clone();
+        let new_part = download::part_path(&new_final);
+        if new_final.exists() || new_part.exists() {
+            return Err(format!("“{name}” already exists in that folder."));
+        }
+
+        // Move whichever file is actually on disk. A queued download that has
+        // not started has neither, and only the plan needs updating.
+        let moved = if entry.status == Status::Completed { &old_final } else { &old_part };
+        if moved.exists() {
+            let to = if entry.status == Status::Completed { &new_final } else { &new_part };
+            std::fs::rename(moved, to).map_err(|e| format!("cannot rename: {e}"))?;
+        }
+
+        entry.plan.final_path = new_final;
+        entry.plan.part_path = new_part;
+        // yt-dlp is told the name again on resume; an HTTP download reads it
+        // from the plan.
+        entry.name = Some(name);
+        drop(queue);
+        self.save_queue();
+        Ok(())
+    }
+
     /// Ask a running transfer to stop, leaving the partial file in place.
     pub fn pause(&self, id: &str) {
         if let Some(active) = self.active.lock().unwrap().remove(id) {
@@ -1156,6 +1222,84 @@ mod tests {
 
     fn status_of(state: &AppState, id: &str) -> Status {
         state.queue.lock().unwrap().iter().find(|d| d.id == id).unwrap().status
+    }
+
+    /// Renaming moves the real file, keeps the extension when none is typed,
+    /// refuses a collision, and refuses a running transfer.
+    #[test]
+    fn rename_moves_the_file_on_disk() {
+        let state = app();
+        let dir = std::env::temp_dir().join(format!("fetchd-rename-{}", uid()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let plan = DownloadPlan {
+            url: "https://example.com/invoice.pdf".into(),
+            final_path: dir.join("invoice.pdf"),
+            part_path: dir.join("invoice.pdf.part"),
+            total: Some(4),
+            supports_ranges: true,
+            validator: None,
+            ranges: vec![(0, 3)],
+            engine: crate::download::Engine::Http,
+            thumbnail: None,
+        };
+        std::fs::write(&plan.part_path, b"abcd").unwrap();
+        state.queue.lock().unwrap().push(Download::new("r1".into(), plan.clone()));
+        state.set_status("r1", Status::Paused, None);
+
+        // No extension typed: the source's is kept, and the *partial* moves
+        // because the download is unfinished.
+        state.rename("r1", "report").unwrap();
+        assert!(dir.join("report.pdf.part").exists());
+        assert!(!dir.join("invoice.pdf.part").exists());
+        assert_eq!(
+            state.queue.lock().unwrap()[0].plan.final_path,
+            dir.join("report.pdf")
+        );
+
+        // A name that already exists is refused, and nothing moves.
+        std::fs::write(dir.join("taken.pdf"), b"x").unwrap();
+        let err = state.rename("r1", "taken.pdf").unwrap_err();
+        assert!(err.contains("already exists"), "unexpected error: {err}");
+        assert!(dir.join("report.pdf.part").exists());
+
+        // A completed entry moves the finished file instead of the partial.
+        std::fs::rename(dir.join("report.pdf.part"), dir.join("report.pdf")).unwrap();
+        state.set_status("r1", Status::Completed, None);
+        state.rename("r1", "final.pdf").unwrap();
+        assert!(dir.join("final.pdf").exists());
+        assert!(!dir.join("report.pdf").exists());
+
+        // A running transfer holds the file open; renaming is refused.
+        state.set_status("r1", Status::Downloading, None);
+        assert!(state.rename("r1", "nope.pdf").is_err());
+
+        // A half-finished video is refused: yt-dlp's own part files are named
+        // after the old output template and would be abandoned.
+        {
+            let mut queue = state.queue.lock().unwrap();
+            let e = queue.iter_mut().find(|d| d.id == "r1").unwrap();
+            e.plan.engine = crate::download::Engine::YtDlp;
+            e.status = Status::Paused;
+            e.done = vec![512];
+        }
+        assert!(state.rename("r1", "half.mp4").is_err());
+        {
+            let mut queue = state.queue.lock().unwrap();
+            let e = queue.iter_mut().find(|d| d.id == "r1").unwrap();
+            e.plan.engine = crate::download::Engine::Http;
+            e.done = vec![0];
+        }
+
+        // A path in the name cannot escape the download folder.
+        state.set_status("r1", Status::Paused, None);
+        state.rename("r1", "../escaped.pdf").unwrap();
+        assert_eq!(
+            state.queue.lock().unwrap()[0].plan.final_path,
+            dir.join("escaped.pdf")
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The core of the pause/resume ANR fix: claiming is atomic and never hands

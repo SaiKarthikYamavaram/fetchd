@@ -37,6 +37,9 @@ export const IconCopy = ({ size = 16 }: P) => (
 export const IconCheck = ({ size = 16 }: P) => (
   <svg {...base(size)}><path d="M20 6 9 17l-5-5" /></svg>
 );
+export const IconEdit = ({ size = 16 }: P) => (
+  <svg {...base(size)}><path d="M11 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-6" /><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" /></svg>
+);
 export const IconTrash = ({ size = 16 }: P) => (
   <svg {...base(size)}><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg>
 );

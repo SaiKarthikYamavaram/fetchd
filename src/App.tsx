@@ -13,11 +13,12 @@ import { SettingsView } from "./components/SettingsView";
 import { applyTheme } from "./lib/theme";
 import { DetailModal } from "./components/DetailModal";
 import { ConfirmDelete } from "./components/ConfirmDelete";
+import { RenameDialog } from "./components/RenameDialog";
 import { AddDialog } from "./components/AddDialog";
 import {
   IconArchive, IconDisc, IconDoc, IconDownload, IconFile,
   IconFolder, IconImage, IconImport, IconMusic, IconOpen, IconPause, IconPlay,
-  IconRetry, IconSettings, IconTrash, IconVideo,
+  IconEdit, IconRetry, IconSettings, IconTrash, IconVideo,
 } from "./components/icons";
 import { Spinner, Dots } from "./components/Loaders";
 import "./App.css";
@@ -47,6 +48,7 @@ function App() {
   const [filter, setFilter] = useState<Filter>("all");
   const [detailId, setDetailId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [renameId, setRenameId] = useState<string | null>(null);
   // URL awaiting confirmation in the add dialog (location, quality, start).
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
   // Set when the extension parked the request; confirming replays its session.
@@ -166,6 +168,7 @@ function App() {
   // live status; close automatically if the entry is gone.
   const detailRow = detailId ? rows.find((r) => r.id === detailId) ?? null : null;
   const deleteRow = deleteId ? rows.find((r) => r.id === deleteId) ?? null : null;
+  const renameRow = renameId ? rows.find((r) => r.id === renameId) ?? null : null;
 
   return (
     <div className="app">
@@ -240,6 +243,7 @@ function App() {
               speed={samples.current.get(row.id)?.speed ?? 0}
               onOpen={() => setDetailId(row.id)}
               onDelete={() => setDeleteId(row.id)}
+              onRename={() => setRenameId(row.id)}
             />
           ))}
           {visible.length === 0 && (
@@ -266,6 +270,9 @@ function App() {
       )}
       {deleteRow && (
         <ConfirmDelete row={deleteRow} onClose={() => setDeleteId(null)} />
+      )}
+      {renameRow && (
+        <RenameDialog row={renameRow} onClose={() => setRenameId(null)} />
       )}
       {pendingUrl && (
         <AddDialog
@@ -296,7 +303,7 @@ function FilterPill({
 }
 
 function Row({
-  row, liveBytes, liveTotal, speed, onOpen, onDelete,
+  row, liveBytes, liveTotal, speed, onOpen, onDelete, onRename,
 }: {
   row: DownloadView;
   liveBytes?: number;
@@ -304,6 +311,7 @@ function Row({
   speed: number;
   onOpen: () => void;
   onDelete: () => void;
+  onRename: () => void;
 }) {
   const downloaded = row.status === "downloading" && liveBytes !== undefined ? liveBytes : row.downloaded;
   // yt-dlp size is only known once running, so fall back to the live total.
@@ -398,6 +406,11 @@ function Row({
           </>
         )}
         <span className="act-sep" />
+        {/* A running transfer holds its `.part` open, so renaming needs a pause
+            first — hide the button rather than offer a guaranteed error. */}
+        {row.status !== "downloading" && (
+          <button className="act" title="Rename" onClick={onRename}><IconEdit /></button>
+        )}
         <button className="act danger" title="Remove" onClick={onDelete}><IconTrash /></button>
       </div>
     </div>

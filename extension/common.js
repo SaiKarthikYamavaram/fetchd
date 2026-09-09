@@ -77,14 +77,15 @@ async function cookieHeaderFor(url) {
   } catch { return null; }
 }
 
-// Send one download to fetchd. Returns true on success.
-async function sendToFetchd(url, referer) {
+// Send one download to fetchd. `video` forces the yt-dlp engine (for streaming
+// sites). Returns true on success.
+async function sendToFetchd(url, referer, video = false) {
   const cookie = await cookieHeaderFor(url);
   try {
     const res = await fetch(`${FETCHD}/add`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, cookie, userAgent: UA, referer }),
+      body: JSON.stringify({ url, cookie, userAgent: UA, referer, video }),
     });
     return res.ok;
   } catch {

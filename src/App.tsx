@@ -49,6 +49,9 @@ function App() {
   // Live bytes arrive far more often than the queue snapshot, so they are kept
   // out of React state and merged at render time.
   const live = useRef(new Map<string, number>());
+  // Live total from progress events — for yt-dlp the size is only known once
+  // the transfer is running, so the queue snapshot's total is null until then.
+  const liveTotal = useRef(new Map<string, number>());
   const samples = useRef(new Map<string, Sample>());
   const [, forceRender] = useState(0);
 
@@ -64,8 +67,9 @@ function App() {
     refresh();
     const unlistenQueue = listen<DownloadView[]>("queue://changed", (e) => setRows(e.payload));
     const unlistenProgress = listen<ProgressRow>("download://progress", (event) => {
-      const { id, downloaded } = event.payload;
+      const { id, downloaded, total } = event.payload;
       live.current.set(id, downloaded);
+      if (total) liveTotal.current.set(id, total);
       const now = performance.now();
       const prev = samples.current.get(id);
       let speed = prev?.speed ?? 0;
@@ -199,6 +203,7 @@ function App() {
               key={row.id}
               row={row}
               liveBytes={live.current.get(row.id)}
+              liveTotal={liveTotal.current.get(row.id)}
               speed={samples.current.get(row.id)?.speed ?? 0}
               onOpen={() => setDetailId(row.id)}
               onDelete={() => setDeleteId(row.id)}
@@ -243,17 +248,20 @@ function FilterPill({
 }
 
 function Row({
-  row, liveBytes, speed, onOpen, onDelete,
+  row, liveBytes, liveTotal, speed, onOpen, onDelete,
 }: {
   row: DownloadView;
   liveBytes?: number;
+  liveTotal?: number;
   speed: number;
   onOpen: () => void;
   onDelete: () => void;
 }) {
   const downloaded = row.status === "downloading" && liveBytes !== undefined ? liveBytes : row.downloaded;
-  const percent = row.total ? Math.min(100, (downloaded / row.total) * 100) : null;
-  const remaining = row.total ? row.total - downloaded : 0;
+  // yt-dlp size is only known once running, so fall back to the live total.
+  const total = row.total ?? (row.status === "downloading" ? liveTotal ?? null : null);
+  const percent = total ? Math.min(100, (downloaded / total) * 100) : null;
+  const remaining = total ? total - downloaded : 0;
   const eta = row.status === "downloading" && speed > 0 ? formatEta(remaining / speed) : "";
   const running = row.status === "downloading";
   const kind = fileKind(row.filename);
@@ -286,7 +294,7 @@ function Row({
         <div className="row-meta">
           <span>
             {formatBytes(downloaded)}
-            {row.total ? ` / ${formatBytes(row.total)}` : " · unknown size"}
+            {total ? ` / ${formatBytes(total)}` : " · unknown size"}
           </span>
           <span className="meta-right">
             {running && (

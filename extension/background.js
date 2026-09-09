@@ -115,6 +115,10 @@ chrome.runtime.onInstalled.addListener(() => {
       contexts: ["link", "audio", "video", "image"],
     });
     chrome.contextMenus.create({
+      id: "fetchd-video", title: "Download video with fetchd (yt-dlp)",
+      contexts: ["page", "link", "video"],
+    });
+    chrome.contextMenus.create({
       id: "fetchd-all-links", title: "Download all links on this page",
       contexts: ["page"],
     });
@@ -130,6 +134,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "fetchd-link") {
     const url = info.linkUrl || info.srcUrl;
     if (url) await sendOne(url, referer);
+  } else if (info.menuItemId === "fetchd-video") {
+    // Prefer an explicit link/media target; otherwise the page URL itself
+    // (yt-dlp resolves the video from a watch page).
+    const url = info.linkUrl || info.srcUrl || info.pageUrl || (tab && tab.url);
+    if (url) await sendOne(url, referer, true);
   } else if (info.menuItemId === "fetchd-all-links") {
     await grabFromPage(tab, "links", referer);
   } else if (info.menuItemId === "fetchd-all-images") {
@@ -224,10 +233,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true; // async response
 });
 
-async function sendOne(url, referer) {
-  const ok = await sendToFetchd(url, referer);
+async function sendOne(url, referer, video = false) {
+  const ok = await sendToFetchd(url, referer, video);
   notify(ok ? "Sent to fetchd" : "fetchd not reachable",
-         ok ? filenameFromUrl(url) : "Start the fetchd app and try again.");
+         ok ? (video ? "Video queued" : filenameFromUrl(url)) : "Start the fetchd app and try again.");
 }
 
 function notify(title, message) {

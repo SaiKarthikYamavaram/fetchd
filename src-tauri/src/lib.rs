@@ -4,6 +4,7 @@ mod queue;
 mod server;
 mod state;
 mod throttle;
+mod ytdlp;
 
 use std::sync::Arc;
 use std::time::Duration;

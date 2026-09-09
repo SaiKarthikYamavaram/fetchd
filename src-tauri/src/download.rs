@@ -672,6 +672,17 @@ impl Progress {
     }
 }
 
+/// Which engine handles a download.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Engine {
+    /// fetchd's own segmented HTTP engine.
+    #[default]
+    Http,
+    /// Delegated to yt-dlp (streaming sites).
+    YtDlp,
+}
+
 /// Everything decided before the first byte moves: where the file goes, how
 /// big it is, how it splits, and what validator proves it has not changed.
 ///
@@ -686,6 +697,8 @@ pub struct DownloadPlan {
     pub supports_ranges: bool,
     pub validator: Option<String>,
     pub ranges: Vec<(u64, u64)>,
+    #[serde(default)]
+    pub engine: Engine,
 }
 
 impl DownloadPlan {
@@ -701,13 +714,41 @@ impl DownloadPlan {
     }
 }
 
+/// Build a yt-dlp plan without probing. The real filename is unknown until
+/// yt-dlp resolves it, so the display name is a placeholder updated on
+/// completion.
+pub fn prepare_video(url: &str, dest_dir: &Path) -> Result<DownloadPlan, String> {
+    let parsed = validate_url(url)?;
+    let host = parsed.host_str().unwrap_or("video").to_string();
+    Ok(DownloadPlan {
+        url: parsed.to_string(),
+        // A directory-based placeholder; open-folder works, and the name is
+        // replaced with the real title once yt-dlp finishes.
+        final_path: dest_dir.join(format!("{host} video")),
+        part_path: dest_dir.to_path_buf(),
+        total: None,
+        supports_ranges: false,
+        validator: None,
+        ranges: Vec::new(),
+        engine: Engine::YtDlp,
+    })
+}
+
 /// Probe the server and reserve a name, without transferring anything.
+///
+/// `force_video` (or an auto-detected streaming site) routes to the yt-dlp
+/// engine instead, skipping the HTTP probe entirely.
 pub async fn prepare(
     client: &Client,
     url: &str,
     dest_dir: &Path,
     segments: u32,
+    force_video: bool,
 ) -> Result<DownloadPlan, String> {
+    if force_video || crate::ytdlp::is_video_site(url) {
+        return prepare_video(url, dest_dir);
+    }
+
     let parsed = validate_url(url)?;
     let info = probe(client, &parsed).await?;
 
@@ -736,6 +777,7 @@ pub async fn prepare(
         supports_ranges: info.supports_ranges,
         validator: info.validator,
         ranges,
+        engine: Engine::Http,
     })
 }
 
@@ -1507,7 +1549,7 @@ mod tests {
     where
         F: Fn(u64, Option<u64>) + Send + Sync + 'static,
     {
-        let plan = prepare(client, url, dest_dir, segments).await?;
+        let plan = prepare(client, url, dest_dir, segments, false).await?;
         let progress = Progress::new(plan.segment_count());
         run(client, segment_client, &plan, &progress, &Throttle::unlimited(), token, on_progress).await
     }
@@ -1658,7 +1700,7 @@ mod tests {
         let (client, seg) = clients();
         let total = 10 * 1024 * 1024u64;
 
-        let plan = prepare(&client, BIG, &dir, 8).await.unwrap();
+        let plan = prepare(&client, BIG, &dir, 8, false).await.unwrap();
         assert_eq!(plan.ranges.len(), 8, "expected a segmented plan");
 
         // First attempt: cancel it mid-flight.

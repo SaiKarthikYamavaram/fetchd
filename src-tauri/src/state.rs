@@ -41,6 +41,17 @@ pub struct Settings {
     /// means unlimited.
     #[serde(default)]
     pub bandwidth_kb: u64,
+    /// Path to the yt-dlp binary. Empty falls back to `yt-dlp` on PATH.
+    #[serde(default)]
+    pub ytdlp_path: String,
+    /// Browser to read cookies from for yt-dlp (`--cookies-from-browser`),
+    /// e.g. "brave". Empty uses the manual cookies file, if any.
+    #[serde(default)]
+    pub cookies_browser: String,
+    /// yt-dlp quality: "best" (default), a max height ("2160".."480"), or
+    /// "audio" (extract to mp3).
+    #[serde(default)]
+    pub video_quality: String,
 }
 
 impl Default for Settings {
@@ -53,6 +64,9 @@ impl Default for Settings {
             cookies_file: None,
             user_agent: None,
             bandwidth_kb: 0,
+            ytdlp_path: String::new(),
+            cookies_browser: String::new(),
+            video_quality: "best".into(),
         }
     }
 }
@@ -279,6 +293,23 @@ impl AppState {
         }
     }
 
+    /// Set the resolved output path once yt-dlp reports it (its filename is only
+    /// known after resolution), and record the final size from disk so the
+    /// completed row shows a real size instead of "unknown".
+    fn set_final_path(&self, id: &str, path: PathBuf) {
+        let size = std::fs::metadata(&path).ok().map(|m| m.len());
+        let mut queue = self.queue.lock().unwrap();
+        if let Some(d) = queue.iter_mut().find(|d| d.id == id) {
+            d.plan.final_path = path;
+            if let Some(size) = size {
+                d.plan.total = Some(size);
+                // yt-dlp keeps no per-segment counters, so mark it fully done
+                // here or the completed row would read 0 / total.
+                d.done = vec![size];
+            }
+        }
+    }
+
     pub fn save_queue(&self) {
         let snapshot = self.queue.lock().unwrap().clone();
         if let Err(e) = queue::save_json(&self.data_dir.join("queue.json"), &snapshot) {
@@ -298,23 +329,24 @@ impl AppState {
     /// Add a URL typed into the app. Uses the manual cookies.txt session, if
     /// any.
     pub async fn add(&self, app: &AppHandle, url: &str) -> Result<String, String> {
-        self.add_with_session(app, url, None).await
+        self.add_with_session(app, url, None, false).await
     }
 
     /// Add a URL, optionally with a session the browser extension captured for
-    /// it. The session is stored on the entry so a later resume replays the
-    /// same cookie/UA/referer.
+    /// it, and optionally forcing the yt-dlp video engine. The session is
+    /// stored on the entry so a later resume replays the same cookie/UA/referer.
     pub async fn add_with_session(
         &self,
         app: &AppHandle,
         url: &str,
         captured: Option<Session>,
+        force_video: bool,
     ) -> Result<String, String> {
         let dir = self.download_dir(app)?;
         let segments = self.settings().segments;
         let session = self.session_for(url, captured);
         let (client, _) = self.clients_for(&session)?;
-        let plan = download::prepare(&client, url, &dir, segments).await?;
+        let plan = download::prepare(&client, url, &dir, segments, force_video).await?;
 
         let id = self.next_id();
         let mut entry = Download::new(id.clone(), plan);
@@ -481,69 +513,11 @@ fn spawn_transfer(app: AppHandle, state: Arc<AppState>, entry: Download) {
     tauri::async_runtime::spawn(async move {
         let plan = entry.plan.clone();
 
-        // Persist offsets periodically so an unclean stop loses at most a few
-        // seconds of progress rather than the whole transfer.
-        let checkpoint = {
-            let state = Arc::clone(&state);
-            let id = id.clone();
-            let progress = progress.clone();
-            let token = token.clone();
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                loop {
-                    tokio::select! {
-                        _ = token.cancelled() => break,
-                        _ = interval.tick() => {
-                            state.record_progress(&id, progress.snapshot());
-                            state.save_queue();
-                        }
-                    }
-                }
-            })
+        let result: Result<PathBuf, String> = if plan.engine == download::Engine::YtDlp {
+            run_video(&app, &state, &plan, &id, token.clone()).await
+        } else {
+            run_http(&app, &state, &entry, &plan, &progress, &id, token.clone()).await
         };
-
-        // Prefer the session captured for this entry (extension), falling back
-        // to the manual cookies.txt. The clients are rebuilt per run rather
-        // than reused, so an edited cookies file takes effect on the next
-        // resume; a stale extension cookie simply 403s and the user re-sends.
-        let session = state.session_for(&plan.url, entry.session.clone());
-        let clients = state.clients_for(&session);
-        let (client, segment_client) = match clients {
-            Ok(pair) => pair,
-            Err(e) => {
-                state.active.lock().unwrap().remove(&id);
-                state.set_status(&id, Status::Failed, Some(e));
-                state.save_queue();
-                emit_queue(&app, &state);
-                return;
-            }
-        };
-
-        // Snapshot the shared limiter for this run. A later cap change rebuilds
-        // the throttle; in-flight transfers keep the one they started with,
-        // which is fine — the next resume picks up the new cap.
-        let throttle = state.current_throttle();
-
-        let emitter = app.clone();
-        let row_id = id.clone();
-        let result = download::run(
-            &client,
-            &segment_client,
-            &plan,
-            &progress,
-            &throttle,
-            token.clone(),
-            move |downloaded, total| {
-                let _ = emitter.emit(
-                    "download://progress",
-                    ProgressRow { id: row_id.clone(), downloaded, total },
-                );
-            },
-        )
-        .await;
-
-        checkpoint.abort();
 
         // Only act if this task still owns the id. If it was paused and then
         // resumed as a fresh run, a newer task now owns `active[id]`, and this
@@ -566,9 +540,17 @@ fn spawn_transfer(app: AppHandle, state: Arc<AppState>, entry: Download) {
         state.record_progress(&id, progress.snapshot());
 
         match result {
-            Ok(_) => {
+            Ok(path) => {
+                // yt-dlp only knows the real filename once it finishes.
+                if plan.engine == download::Engine::YtDlp {
+                    state.set_final_path(&id, path.clone());
+                }
                 state.set_status(&id, Status::Completed, None);
-                notify_complete(&app, &entry.filename());
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| entry.filename());
+                notify_complete(&app, &name);
             }
             Err(e) if token.is_cancelled() => {
                 // A cancelled transfer was paused or removed; whichever
@@ -584,6 +566,115 @@ fn spawn_transfer(app: AppHandle, state: Arc<AppState>, entry: Download) {
         // A finished transfer frees a slot.
         pump(&app, &state);
     });
+}
+
+/// The HTTP-engine run: periodic checkpoint task, per-session clients, shared
+/// throttle. Returns the final path (already known from the plan).
+async fn run_http(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    entry: &Download,
+    plan: &download::DownloadPlan,
+    progress: &Progress,
+    id: &str,
+    token: CancellationToken,
+) -> Result<PathBuf, String> {
+    // Persist offsets periodically so an unclean stop loses at most a few
+    // seconds of progress rather than the whole transfer.
+    let checkpoint = {
+        let state = Arc::clone(state);
+        let id = id.to_string();
+        let progress = progress.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    _ = interval.tick() => {
+                        state.record_progress(&id, progress.snapshot());
+                        state.save_queue();
+                    }
+                }
+            }
+        })
+    };
+
+    // Prefer the session captured for this entry (extension), falling back to
+    // the manual cookies.txt.
+    let session = state.session_for(&plan.url, entry.session.clone());
+    let (client, segment_client) = match state.clients_for(&session) {
+        Ok(pair) => pair,
+        Err(e) => {
+            checkpoint.abort();
+            return Err(e);
+        }
+    };
+
+    let throttle = state.current_throttle();
+    let emitter = app.clone();
+    let row_id = id.to_string();
+    let result = download::run(
+        &client,
+        &segment_client,
+        plan,
+        progress,
+        &throttle,
+        token,
+        move |downloaded, total| {
+            let _ = emitter.emit(
+                "download://progress",
+                ProgressRow { id: row_id.clone(), downloaded, total },
+            );
+        },
+    )
+    .await;
+
+    checkpoint.abort();
+    result
+}
+
+/// The yt-dlp run: no checkpoint, no throttle, no segment clients. Cookies come
+/// from the manual file or a configured browser.
+async fn run_video(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    plan: &download::DownloadPlan,
+    id: &str,
+    token: CancellationToken,
+) -> Result<PathBuf, String> {
+    let settings = state.settings();
+    let ytdlp = if settings.ytdlp_path.is_empty() { "yt-dlp".to_string() } else { settings.ytdlp_path.clone() };
+    let dir = plan
+        .final_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let cookies = crate::ytdlp::Cookies {
+        file: settings.cookies_file.clone(),
+        browser: if settings.cookies_browser.is_empty() {
+            None
+        } else {
+            Some(settings.cookies_browser.clone())
+        },
+    };
+
+    let quality = if settings.video_quality.is_empty() {
+        "best".to_string()
+    } else {
+        settings.video_quality.clone()
+    };
+
+    let emitter = app.clone();
+    let row_id = id.to_string();
+    crate::ytdlp::run(&ytdlp, &plan.url, &dir, &cookies, &quality, token, move |t| {
+        let _ = emitter.emit(
+            "download://progress",
+            ProgressRow { id: row_id.clone(), downloaded: t.downloaded, total: t.total },
+        );
+    })
+    .await
 }
 
 pub fn emit_queue(app: &AppHandle, state: &Arc<AppState>) {
@@ -634,6 +725,7 @@ mod tests {
             supports_ranges: true,
             validator: None,
             ranges: vec![(0, 999)],
+            engine: crate::download::Engine::Http,
         };
         state.queue.lock().unwrap().push(Download::new(id.into(), plan));
     }
@@ -708,6 +800,7 @@ mod tests {
             supports_ranges: false,
             validator: None,
             ranges: vec![],
+            engine: crate::download::Engine::Http,
         };
         state.queue.lock().unwrap().push(Download::new("k".into(), plan));
 
@@ -725,6 +818,7 @@ mod tests {
             supports_ranges: false,
             validator: None,
             ranges: vec![],
+            engine: crate::download::Engine::Http,
         };
         state.queue.lock().unwrap().push(Download::new("k2".into(), plan2));
         state.remove("k2", true);

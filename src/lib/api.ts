@@ -36,6 +36,9 @@ export type Settings = {
   cookies_file: string | null;
   user_agent: string | null;
   bandwidth_kb: number;
+  ytdlp_path: string;
+  cookies_browser: string;
+  video_quality: string;
 };
 
 export type ProgressRow = {

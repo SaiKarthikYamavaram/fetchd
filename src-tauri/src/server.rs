@@ -34,6 +34,9 @@ struct AddRequest {
     #[serde(rename = "userAgent")]
     user_agent: Option<String>,
     referer: Option<String>,
+    /// Force the yt-dlp video engine (from the extension's "Download video").
+    #[serde(default)]
+    video: bool,
 }
 
 /// Start the bridge on its own thread. Returns immediately; logs and keeps
@@ -114,9 +117,10 @@ fn handle_add(app: &AppHandle, state: &Arc<AppState>, body: &str) -> Result<Stri
     let state = Arc::clone(state);
     let url = req.url.clone();
 
+    let force_video = req.video;
     let (tx, rx) = std::sync::mpsc::channel();
     tauri::async_runtime::spawn(async move {
-        let result = state.add_with_session(&app, &url, Some(session)).await;
+        let result = state.add_with_session(&app, &url, Some(session), force_video).await;
         if result.is_ok() {
             state::pump(&app, &state);
         }

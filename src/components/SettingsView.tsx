@@ -120,6 +120,57 @@ export function SettingsView() {
           }
         />
       </label>
+
+      <hr />
+
+      <h3>Video downloads (yt-dlp)</h3>
+      <p className="help">
+        Streaming sites (YouTube, Vimeo, and ~1800 more) are handled by{" "}
+        <code>yt-dlp</code>, which must be installed. Right-click a page and choose{" "}
+        <em>Download video with fetchd</em>, or paste a video URL — known sites are
+        auto-detected.
+      </p>
+
+      <label className="field">
+        <span>Quality</span>
+        <select
+          value={settings.video_quality || "best"}
+          onChange={(e) => update({ video_quality: e.currentTarget.value })}
+        >
+          <option value="best">Best available</option>
+          <option value="2160">2160p (4K)</option>
+          <option value="1440">1440p</option>
+          <option value="1080">1080p</option>
+          <option value="720">720p</option>
+          <option value="480">480p</option>
+          <option value="audio">Audio only (mp3)</option>
+        </select>
+      </label>
+
+      <div className="field-row">
+        <label className="field">
+          <span>yt-dlp path</span>
+          <input
+            value={settings.ytdlp_path}
+            placeholder="yt-dlp"
+            spellCheck={false}
+            onChange={(e) => update({ ytdlp_path: e.currentTarget.value.trim() })}
+          />
+        </label>
+        <label className="field">
+          <span>Cookies from browser</span>
+          <input
+            value={settings.cookies_browser}
+            placeholder="e.g. brave, chrome, firefox"
+            spellCheck={false}
+            onChange={(e) => update({ cookies_browser: e.currentTarget.value.trim() })}
+          />
+        </label>
+      </div>
+      <p className="help">
+        Cookies from a browser let yt-dlp fetch age-restricted or members-only
+        videos. Leave blank to use the cookies file above, or nothing.
+      </p>
     </section>
   );
 }

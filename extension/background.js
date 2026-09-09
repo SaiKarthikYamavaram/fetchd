@@ -1,102 +1,235 @@
 // fetchd browser integration — service worker.
 //
-// The point of this extension is the one thing a download manager cannot do on
-// its own: get past an interactive anti-bot challenge. The browser has already
-// solved the challenge and holds the resulting cookies (cf_clearance and the
-// rest). This worker reads those cookies for the target URL and hands them to
-// fetchd along with the exact User-Agent and Referer they are bound to, so
-// fetchd replays a session the browser earned.
+// Beyond routing a single link, this mirrors what a download manager's browser
+// module does: it watches page responses for downloadable media, keeps a
+// per-tab list, badges the toolbar with the count, and lets the popup grab any
+// of them (or every link/image on the page) — all replayed through fetchd with
+// the browser's own cookies so authenticated and challenge-protected files
+// work.
 
-const FETCHD = "http://127.0.0.1:47831";
+importScripts("common.js");
 
-// Cookies are bound to the User-Agent that earned them, so send the browser's
-// real one rather than letting fetchd guess.
-const USER_AGENT = navigator.userAgent;
+// ---------------------------------------------------------------------------
+// Per-tab detected media, kept in session storage so it survives the service
+// worker being suspended but clears when the browser closes.
+// ---------------------------------------------------------------------------
+
+const keyFor = (tabId) => `detected_${tabId}`;
+
+async function getDetected(tabId) {
+  const k = keyFor(tabId);
+  const s = await chrome.storage.session.get(k);
+  return s[k] || [];
+}
+
+async function addDetected(tabId, item) {
+  const list = await getDetected(tabId);
+  if (list.some((x) => x.url === item.url)) return; // dedup
+  list.unshift(item);
+  if (list.length > 50) list.pop();
+  await chrome.storage.session.set({ [keyFor(tabId)]: list });
+  updateBadge(tabId, list.length);
+}
+
+async function clearDetected(tabId) {
+  await chrome.storage.session.remove(keyFor(tabId));
+  updateBadge(tabId, 0);
+}
+
+function updateBadge(tabId, count) {
+  chrome.action.setBadgeText({ tabId, text: count ? String(count) : "" });
+  chrome.action.setBadgeBackgroundColor({ tabId, color: "#6366f1" });
+}
+
+// ---------------------------------------------------------------------------
+// Detection: inspect response headers for downloadable content.
+// ---------------------------------------------------------------------------
+
+chrome.webRequest.onHeadersReceived.addListener(
+  (details) => {
+    // Fire-and-forget; the listener itself is synchronous (non-blocking).
+    void maybeDetect(details);
+  },
+  { urls: ["<all_urls>"], types: ["main_frame", "sub_frame", "xmlhttprequest", "media", "other"] },
+  ["responseHeaders"]
+);
+
+async function maybeDetect(details) {
+  if (details.tabId < 0) return; // not tied to a tab
+  const settings = await getSettings();
+  if (!settings.enabled || !settings.grabMedia) return;
+  if (isExcluded(details.url, settings)) return;
+
+  const headers = Object.fromEntries(
+    (details.responseHeaders || []).map((h) => [h.name.toLowerCase(), h.value || ""])
+  );
+
+  const disposition = headers["content-disposition"] || "";
+  const contentType = headers["content-type"] || "";
+  const length = parseInt(headers["content-length"] || "0", 10);
+
+  const filename = filenameFromDisposition(disposition) || filenameFromUrl(details.url);
+  const type = classify(contentType, filename);
+  if (!type) return;
+
+  // Type must be enabled, and size must clear the floor (unless the server
+  // sent no length — common for streams, which we still want to surface).
+  if (!settings.types[type]) return;
+  if (length && length < settings.minSizeKb * 1024) return;
+
+  // An explicit attachment is always worth showing; otherwise require it to be
+  // media or a sizeable binary, so ordinary page images/scripts don't flood.
+  const isAttachment = /attachment/i.test(disposition);
+  if (!isAttachment && (type === "image" || type === "document") && !length) return;
+
+  await addDetected(details.tabId, {
+    url: details.url,
+    filename,
+    type,
+    size: length || 0,
+  });
+}
+
+function filenameFromDisposition(disposition) {
+  // filename*=UTF-8''name  wins over  filename="name"
+  const ext = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(disposition);
+  if (ext) { try { return decodeURIComponent(ext[1].trim().replace(/"/g, "")); } catch { /* fall through */ } }
+  const plain = /filename="?([^";]+)"?/i.exec(disposition);
+  return plain ? plain[1].trim() : null;
+}
+
+// Clear a tab's list when it navigates to a new page.
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.status === "loading" && info.url) clearDetected(tabId);
+});
+chrome.tabs.onRemoved.addListener((tabId) => clearDetected(tabId));
+
+// ---------------------------------------------------------------------------
+// Context menus
+// ---------------------------------------------------------------------------
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: "fetchd-link",
-    title: "Download with fetchd",
-    contexts: ["link", "audio", "video", "image", "selection", "page"],
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "fetchd-link", title: "Download with fetchd",
+      contexts: ["link", "audio", "video", "image"],
+    });
+    chrome.contextMenus.create({
+      id: "fetchd-all-links", title: "Download all links on this page",
+      contexts: ["page"],
+    });
+    chrome.contextMenus.create({
+      id: "fetchd-all-images", title: "Download all images on this page",
+      contexts: ["page"],
+    });
   });
-  chrome.storage.local.get({ intercept: false }, () => {});
 });
 
-chrome.contextMenus.onClicked.addListener((info) => {
-  const url = info.linkUrl || info.srcUrl || info.pageUrl;
-  if (url) sendToFetchd(url, info.pageUrl || url);
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  const referer = info.pageUrl || (tab && tab.url) || "";
+  if (info.menuItemId === "fetchd-link") {
+    const url = info.linkUrl || info.srcUrl;
+    if (url) await sendOne(url, referer);
+  } else if (info.menuItemId === "fetchd-all-links") {
+    await grabFromPage(tab, "links", referer);
+  } else if (info.menuItemId === "fetchd-all-images") {
+    await grabFromPage(tab, "images", referer);
+  }
 });
 
-// Optional: intercept every browser download and route it to fetchd instead.
-// Off by default (toggle in the popup) so the extension is inert until asked.
+// Pull every link or image URL out of the page DOM and send the ones whose
+// type is enabled in settings.
+async function grabFromPage(tab, mode, referer) {
+  if (!tab) return;
+  let results;
+  try {
+    results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: (m) => {
+        const sel = m === "images" ? "img[src]" : "a[href]";
+        const attr = m === "images" ? "src" : "href";
+        return Array.from(document.querySelectorAll(sel))
+          .map((el) => el[attr])
+          .filter((u) => /^https?:/i.test(u));
+      },
+      args: [mode],
+    });
+  } catch {
+    notify("Cannot read this page", "The browser blocked script access here.");
+    return;
+  }
+
+  const urls = [...new Set(results?.[0]?.result || [])];
+  const settings = await getSettings();
+  const wanted = urls.filter((u) => {
+    if (isExcluded(u, settings)) return false;
+    const t = classify("", filenameFromUrl(u));
+    return t && settings.types[t];
+  });
+
+  if (!wanted.length) {
+    notify("Nothing to download", `No matching ${mode} found on this page.`);
+    return;
+  }
+  let ok = 0;
+  for (const u of wanted) if (await sendToFetchd(u, referer)) ok++;
+  notify("Sent to fetchd", `${ok} of ${wanted.length} ${mode} queued.`);
+}
+
+// ---------------------------------------------------------------------------
+// Intercept the browser's own downloads (opt-in).
+// ---------------------------------------------------------------------------
+
 chrome.downloads.onCreated.addListener(async (item) => {
-  const { intercept } = await chrome.storage.local.get({ intercept: false });
-  if (!intercept || !item.finalUrl && !item.url) return;
+  const settings = await getSettings();
+  if (!settings.enabled || !settings.intercept) return;
 
   const url = item.finalUrl || item.url;
-  if (!/^https?:/i.test(url)) return;
+  if (!url || !/^https?:/i.test(url)) return;
+  if (isExcluded(url, settings)) return;
 
-  // Cancel the browser's own download and let fetchd take it.
+  const type = classify(item.mime, item.filename || filenameFromUrl(url));
+  if (!type || !settings.types[type]) return;
+  if (item.fileSize > 0 && item.fileSize < settings.minSizeKb * 1024) return;
+
   try {
     await chrome.downloads.cancel(item.id);
     await chrome.downloads.erase({ id: item.id });
-  } catch (_) {
-    // If it already finished or cannot be cancelled, do not double-download.
-    return;
+  } catch {
+    return; // already finished / uncancellable — don't double-download
   }
-  sendToFetchd(url, item.referrer || url);
+  await sendOne(url, item.referrer || url);
 });
 
-// Build a Cookie header for `url` from the browser's own jar.
-//
-// chrome.cookies.getAll with a URL returns exactly the cookies the browser
-// would itself send to that URL — correct domain, path, secure and host-only
-// scoping already applied — so no cookie for another site can leak in.
-async function cookieHeaderFor(url) {
-  try {
-    const cookies = await chrome.cookies.getAll({ url });
-    if (!cookies.length) return null;
-    return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
-  } catch (_) {
-    return null;
-  }
-}
+// ---------------------------------------------------------------------------
+// Messages from popup
+// ---------------------------------------------------------------------------
 
-async function sendToFetchd(url, referer) {
-  const cookie = await cookieHeaderFor(url);
-
-  try {
-    const res = await fetch(`${FETCHD}/add`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, cookie, userAgent: USER_AGENT, referer }),
-    });
-
-    if (res.ok) {
-      notify("Sent to fetchd", shortName(url));
-    } else {
-      const msg = await res.text();
-      notify("fetchd rejected the download", msg.slice(0, 180));
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  (async () => {
+    if (msg.type === "getDetected") {
+      sendResponse({ items: await getDetected(msg.tabId), alive: await fetchdAlive() });
+    } else if (msg.type === "download") {
+      sendResponse({ ok: await sendToFetchd(msg.url, msg.referer) });
+    } else if (msg.type === "downloadAll") {
+      const items = await getDetected(msg.tabId);
+      let ok = 0;
+      for (const it of items) if (await sendToFetchd(it.url, msg.referer)) ok++;
+      sendResponse({ ok, total: items.length });
+    } else if (msg.type === "clear") {
+      await clearDetected(msg.tabId);
+      sendResponse({ ok: true });
     }
-  } catch (_) {
-    notify("fetchd is not running", "Start the fetchd app, then try again.");
-  }
-}
+  })();
+  return true; // async response
+});
 
-function shortName(url) {
-  try {
-    const p = new URL(url).pathname.split("/").pop();
-    return p || url;
-  } catch (_) {
-    return url;
-  }
+async function sendOne(url, referer) {
+  const ok = await sendToFetchd(url, referer);
+  notify(ok ? "Sent to fetchd" : "fetchd not reachable",
+         ok ? filenameFromUrl(url) : "Start the fetchd app and try again.");
 }
 
 function notify(title, message) {
-  chrome.notifications?.create({
-    type: "basic",
-    iconUrl: "icon128.png",
-    title,
-    message: message || "",
-  });
+  chrome.notifications?.create({ type: "basic", iconUrl: "icon128.png", title, message: message || "" });
 }

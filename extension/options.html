@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>fetchd options</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        max-width: 520px; margin: 0 auto; padding: 28px 22px;
+        font: 14px system-ui, sans-serif; color: #1a1a1a; background: #f7f8fa;
+      }
+      @media (prefers-color-scheme: dark) { body { color: #e8eaf0; background: #0c0e13; } }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      .sub { color: #8b909c; margin: 0 0 22px; font-size: 13px; }
+      .card {
+        background: color-mix(in srgb, currentColor 4%, transparent);
+        border: 1px solid rgba(128,128,128,0.2); border-radius: 12px;
+        padding: 16px 18px; margin-bottom: 16px;
+      }
+      h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #8b909c; margin: 0 0 12px; }
+      .row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; }
+      label { cursor: pointer; }
+      .types { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      input[type="number"], textarea {
+        font: inherit; color: inherit; background: color-mix(in srgb, currentColor 6%, transparent);
+        border: 1px solid rgba(128,128,128,0.3); border-radius: 8px; padding: 7px 10px;
+      }
+      input[type="number"] { width: 110px; }
+      textarea { width: 100%; box-sizing: border-box; min-height: 64px; resize: vertical; }
+      .hint { font-size: 12px; color: #8b909c; margin: 6px 0 0; }
+      .saved { color: #10b981; font-size: 12.5px; height: 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>fetchd integration</h1>
+    <p class="sub">How the browser hands downloads to the fetchd app.</p>
+
+    <div class="card">
+      <h2>General</h2>
+      <div class="row"><label for="enabled">Extension enabled</label><input type="checkbox" id="enabled" /></div>
+      <div class="row"><label for="grabMedia">Detect media on pages</label><input type="checkbox" id="grabMedia" /></div>
+      <div class="row"><label for="intercept">Capture the browser's own downloads</label><input type="checkbox" id="intercept" /></div>
+      <div class="row"><label for="minSizeKb">Ignore files smaller than (KB)</label><input type="number" id="minSizeKb" min="0" step="128" /></div>
+    </div>
+
+    <div class="card">
+      <h2>File types to handle</h2>
+      <div class="types">
+        <label><input type="checkbox" data-type="video" /> Video</label>
+        <label><input type="checkbox" data-type="audio" /> Audio</label>
+        <label><input type="checkbox" data-type="archive" /> Archives</label>
+        <label><input type="checkbox" data-type="document" /> Documents</label>
+        <label><input type="checkbox" data-type="image" /> Images</label>
+        <label><input type="checkbox" data-type="other" /> Other binaries</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Excluded domains</h2>
+      <textarea id="excludeDomains" placeholder="one host per line, e.g. mail.google.com"></textarea>
+      <p class="hint">Requests to these hosts are never detected or captured.</p>
+    </div>
+
+    <div class="saved" id="saved"></div>
+
+    <script src="common.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

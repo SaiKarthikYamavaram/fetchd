@@ -13,7 +13,7 @@ const VIDEO_HOSTS = [
   "streamable.com",
 ];
 
-function isVideoUrl(url: string): boolean {
+export function isVideoUrl(url: string): boolean {
   try {
     const h = new URL(url).hostname.toLowerCase();
     return VIDEO_HOSTS.some((d) => h === d || h.endsWith(`.${d}`));
@@ -25,7 +25,7 @@ function isVideoUrl(url: string): boolean {
 /// Best guess at the filename, shown as the placeholder so the field hints at
 /// what "automatic" will produce. The real name can still differ — the server's
 /// Content-Disposition or the video's title wins when the field is left blank.
-function suggestedName(url: string): string {
+export function suggestedName(url: string): string {
   try {
     const last = new URL(url).pathname.split("/").filter(Boolean).pop() ?? "";
     return decodeURIComponent(last);

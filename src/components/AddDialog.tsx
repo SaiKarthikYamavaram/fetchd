@@ -22,6 +22,18 @@ function isVideoUrl(url: string): boolean {
   }
 }
 
+/// Best guess at the filename, shown as the placeholder so the field hints at
+/// what "automatic" will produce. The real name can still differ — the server's
+/// Content-Disposition or the video's title wins when the field is left blank.
+function suggestedName(url: string): string {
+  try {
+    const last = new URL(url).pathname.split("/").filter(Boolean).pop() ?? "";
+    return decodeURIComponent(last);
+  } catch {
+    return "";
+  }
+}
+
 /// The pre-download dialog: choose where the file lands and how it is fetched
 /// before anything starts, instead of silently using the defaults.
 export function AddDialog({
@@ -38,6 +50,7 @@ export function AddDialog({
   onAdded: (msg: string | null) => void;
 }) {
   const [dir, setDir] = useState("");
+  const [name, setName] = useState("");
   const [quality, setQuality] = useState("");
   const [start, setStart] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -79,6 +92,7 @@ export function AddDialog({
 
     const options: AddOptions = {
       dir: dir.trim() || null,
+      name: name.trim() || null,
       quality: video && quality ? quality : null,
       start,
     };
@@ -127,6 +141,21 @@ export function AddDialog({
             </button>
           </div>
         </label>
+
+        <label className="field">
+          <span>Save as</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.currentTarget.value)}
+            placeholder={suggestedName(url) || "Automatic"}
+            spellCheck={false}
+          />
+        </label>
+        <p className="help">
+          {video
+            ? "Leave blank to use the video's title. The container is picked by yt-dlp."
+            : "Leave blank to use the server's name. Without an extension, the source's is kept."}
+        </p>
 
         {video && (
           <label className="field">

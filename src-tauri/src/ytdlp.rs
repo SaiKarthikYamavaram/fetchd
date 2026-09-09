@@ -137,6 +137,7 @@ pub async fn run<F, G>(
     dir: &Path,
     cookies: &Cookies,
     quality: &str,
+    name: Option<&str>,
     limit_kb: Option<u64>,
     proxy: Option<&str>,
     token: CancellationToken,
@@ -151,7 +152,13 @@ where
         .await
         .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
 
-    let out_tmpl = format!("{}/%(title)s [%(id)s].%(ext)s", dir.display());
+    // A name from the add dialog fixes the stem; yt-dlp still chooses the
+    // container. `%` is the template's escape character, so double any in the
+    // user's text to keep it literal.
+    let out_tmpl = match name.map(|n| n.replace('%', "%%")) {
+        Some(stem) => format!("{}/{stem}.%(ext)s", dir.display()),
+        None => format!("{}/%(title)s [%(id)s].%(ext)s", dir.display()),
+    };
 
     let mut cmd = Command::new(ytdlp);
     cmd.arg("--newline")

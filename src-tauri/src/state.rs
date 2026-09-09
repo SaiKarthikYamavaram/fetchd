@@ -104,6 +104,9 @@ pub struct AddOptions {
     pub dir: Option<String>,
     /// yt-dlp quality override ("best", "1080", "audio", ...).
     pub quality: Option<String>,
+    /// Filename to save as, instead of the one the server or the video title
+    /// suggests. An extension is added from the source when omitted.
+    pub name: Option<String>,
     /// Start immediately (default), or add it paused for later.
     pub start: Option<bool>,
 }
@@ -510,6 +513,7 @@ impl AppState {
             Some(d) => PathBuf::from(d),
             None => self.download_dir(app)?,
         };
+        let custom_name = opts.name.as_deref().map(str::trim).filter(|n| !n.is_empty());
         let settings = self.settings();
         // A folder chosen for this download is taken literally; category
         // sorting only shapes the default location.
@@ -542,10 +546,10 @@ impl AppState {
             } else {
                 dir
             };
-            download::video_plan(url, &dir, title, thumbnail)?
+            download::video_plan(url, &dir, title, thumbnail, custom_name)?
         } else {
             let (client, _) = self.clients_for(&session)?;
-            download::prepare(&client, url, &dir, settings.segments, categorize).await?
+            download::prepare(&client, url, &dir, settings.segments, categorize, custom_name).await?
         };
 
         let id = self.next_id();
@@ -555,6 +559,7 @@ impl AppState {
             entry.session = Some(session);
         }
         entry.quality = opts.quality.filter(|q| !q.trim().is_empty());
+        entry.name = custom_name.map(str::to_string);
         // "Download later" parks the entry as Paused so `pump` skips it until
         // the user hits Resume.
         if opts.start == Some(false) {
@@ -765,7 +770,17 @@ fn spawn_transfer(app: AppHandle, state: Arc<AppState>, entry: Download) {
         let plan = entry.plan.clone();
 
         let result: Result<PathBuf, String> = if plan.engine == download::Engine::YtDlp {
-            run_video(&app, &state, &plan, &progress, &id, entry.quality.clone(), token.clone()).await
+            run_video(
+                &app,
+                &state,
+                &plan,
+                &progress,
+                &id,
+                entry.quality.clone(),
+                entry.name.clone(),
+                token.clone(),
+            )
+            .await
         } else {
             run_http(&app, &state, &entry, &plan, &progress, &id, token.clone()).await
         };
@@ -895,6 +910,7 @@ async fn run_video(
     progress: &Progress,
     id: &str,
     quality_override: Option<String>,
+    name_override: Option<String>,
     token: CancellationToken,
 ) -> Result<PathBuf, String> {
     let settings = state.settings();
@@ -968,6 +984,7 @@ async fn run_video(
         &dir,
         &cookies,
         &quality,
+        name_override.as_deref(),
         limit_kb,
         Some(settings.proxy.as_str()).filter(|p| !p.is_empty()),
         token,

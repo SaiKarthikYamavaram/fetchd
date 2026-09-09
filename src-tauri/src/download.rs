@@ -777,12 +777,15 @@ pub fn video_plan(
     dest_dir: &Path,
     title: Option<String>,
     thumbnail: Option<String>,
+    custom: Option<&str>,
 ) -> Result<DownloadPlan, String> {
     let parsed = validate_url(url)?;
     let host = parsed.host_str().unwrap_or("video").to_string();
-    let name = title
-        .as_deref()
+    // A name typed in the add dialog wins over the resolved title. yt-dlp still
+    // picks the container, so the extension is appended once it names the file.
+    let name = custom
         .and_then(sanitize_filename)
+        .or_else(|| title.as_deref().and_then(sanitize_filename))
         .unwrap_or_else(|| format!("{host} video"));
     Ok(DownloadPlan {
         url: parsed.to_string(),
@@ -797,6 +800,19 @@ pub fn video_plan(
     })
 }
 
+/// Give `name` the extension from `fallback` when the user did not type one.
+/// Renaming "report" over "invoice.pdf" should still land a `.pdf`, but a
+/// deliberate "notes.txt" is left exactly as typed.
+fn keep_extension(name: &str, fallback: &str) -> String {
+    if Path::new(name).extension().is_some() {
+        return name.to_string();
+    }
+    match Path::new(fallback).extension().and_then(|e| e.to_str()) {
+        Some(ext) => format!("{name}.{ext}"),
+        None => name.to_string(),
+    }
+}
+
 /// Probe the server and reserve a name, without transferring anything.
 /// HTTP engine only — video routing happens before this in `state`.
 pub async fn prepare(
@@ -805,9 +821,15 @@ pub async fn prepare(
     dest_dir: &Path,
     segments: u32,
     categorize: bool,
+    custom_name: Option<&str>,
 ) -> Result<DownloadPlan, String> {
     let parsed = validate_url(url)?;
-    let info = probe(client, &parsed).await?;
+    let mut info = probe(client, &parsed).await?;
+
+    // A name typed in the add dialog replaces the one the server suggested.
+    if let Some(name) = custom_name.and_then(sanitize_filename) {
+        info.filename = keep_extension(&name, &info.filename);
+    }
 
     // The type is only known once the probe has resolved a filename, so the
     // category sub-folder is chosen here rather than by the caller.
@@ -1460,6 +1482,26 @@ mod tests {
     }
 
     #[test]
+    fn custom_name_keeps_source_extension() {
+        // No extension typed: the source's is appended.
+        assert_eq!(keep_extension("report", "invoice.pdf"), "report.pdf");
+        // An extension typed: taken literally, even a different one.
+        assert_eq!(keep_extension("notes.txt", "invoice.pdf"), "notes.txt");
+        // Nothing to borrow.
+        assert_eq!(keep_extension("report", "download"), "report");
+        // A dotted name whose last part is the extension.
+        assert_eq!(keep_extension("v1.2.3", "app.tar"), "v1.2.3");
+    }
+
+    #[test]
+    fn custom_name_is_sanitised() {
+        // A path in the name field must not escape the download folder.
+        assert_eq!(sanitize_filename("../../etc/passwd").as_deref(), Some("passwd"));
+        assert_eq!(sanitize_filename("a/b/c.bin").as_deref(), Some("c.bin"));
+        assert_eq!(sanitize_filename("  ").as_deref(), None);
+    }
+
+    #[test]
     fn unique_path_suffixes_on_collision() {
         let dir = std::env::temp_dir().join(format!("fetchd-unique-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1650,7 +1692,7 @@ mod tests {
     where
         F: Fn(u64, Option<u64>) + Send + Sync + 'static,
     {
-        let plan = prepare(client, url, dest_dir, segments, false).await?;
+        let plan = prepare(client, url, dest_dir, segments, false, None).await?;
         let progress = Progress::new(plan.segment_count());
         run(client, segment_client, &plan, &progress, &Throttle::unlimited(), token, on_progress).await
     }
@@ -1680,6 +1722,29 @@ mod tests {
         assert_eq!(path.file_name().unwrap(), "1Mb.dat");
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 1_048_576);
         assert!(!part_path(&path).exists(), ".part must be renamed, not left behind");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn network_custom_name_lands_on_disk() {
+        let dir = scratch("custom-name");
+        let (client, _) = clients();
+
+        // No extension typed: the source's ".dat" is kept.
+        let plan = prepare(&client, SMALL, &dir, 4, false, Some("my report"))
+            .await
+            .unwrap();
+        assert_eq!(plan.filename(), "my report.dat");
+        assert!(plan.part_path.exists(), "the name should be reserved up front");
+
+        // A path in the name must not escape the download folder.
+        let escaped = prepare(&client, SMALL, &dir, 4, false, Some("../../evil.bin"))
+            .await
+            .unwrap();
+        assert_eq!(escaped.filename(), "evil.bin");
+        assert_eq!(escaped.final_path.parent().unwrap(), dir.as_path());
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1727,8 +1792,8 @@ mod tests {
         let (client, _) = clients();
 
         let (a, b) = tokio::join!(
-            prepare(&client, SMALL, &dir, 8, false),
-            prepare(&client, SMALL, &dir, 8, false),
+            prepare(&client, SMALL, &dir, 8, false, None),
+            prepare(&client, SMALL, &dir, 8, false, None),
         );
         let (a, b) = (a.unwrap(), b.unwrap());
 
@@ -1820,7 +1885,7 @@ mod tests {
         let (client, seg) = clients();
         let total = 10 * 1024 * 1024u64;
 
-        let plan = prepare(&client, BIG, &dir, 8, false).await.unwrap();
+        let plan = prepare(&client, BIG, &dir, 8, false, None).await.unwrap();
         assert_eq!(plan.ranges.len(), 8, "expected a segmented plan");
 
         // First attempt: cancel it mid-flight.

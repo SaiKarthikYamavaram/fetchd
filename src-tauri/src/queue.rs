@@ -37,6 +37,10 @@ pub struct Download {
     /// back to the global setting when `None`.
     #[serde(default)]
     pub quality: Option<String>,
+    /// Filename chosen in the add dialog. Only the video engine needs it at run
+    /// time — for an HTTP download the name is already baked into the plan.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 impl Download {
@@ -51,6 +55,7 @@ impl Download {
             added_at: now_secs(),
             session: None,
             quality: None,
+            name: None,
             plan,
         }
     }

@@ -65,6 +65,9 @@ export type ProgressRow = {
 /// Per-download choices from the add dialog; omitted fields use the settings.
 export type AddOptions = {
   dir?: string | null;
+  /// Save under this filename instead of the one the server or video title
+  /// suggests. Blank means automatic.
+  name?: string | null;
   quality?: string | null;
   start?: boolean;
 };

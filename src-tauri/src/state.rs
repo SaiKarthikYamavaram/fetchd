@@ -516,7 +516,10 @@ impl AppState {
         let categorize = settings.categorize && explicit_dir.is_none();
         let session = self.session_for(url, captured.clone());
 
-        let plan = if force_video || crate::ytdlp::is_video_site(url) {
+        let plan = if force_video
+            || crate::ytdlp::is_video_site(url)
+            || crate::ytdlp::is_stream_manifest(url)
+        {
             // Resolve title + thumbnail up front (with a timeout) so the row
             // shows the real name and a preview immediately, not a placeholder.
             let ytdlp = if settings.ytdlp_path.is_empty() { "yt-dlp".to_string() } else { settings.ytdlp_path.clone() };

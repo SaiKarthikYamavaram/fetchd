@@ -13,6 +13,8 @@ const DEFAULTS = {
   // Let the app ask for a folder/quality per download instead of using the
   // defaults. The app window comes forward with its add dialog.
   askBeforeDownload: true,
+  // Show the in-page button on video pages (IDM's floating panel).
+  showPanel: true,
   grabMedia: true, // detect streamable/attachment media on pages
   minSizeKb: 512, // ignore anything smaller
   types: { video: true, audio: true, archive: true, document: true, image: false, other: true },
@@ -70,6 +72,13 @@ const VIDEO_HOSTS = [
   "twitter.com", "x.com", "reddit.com", "soundcloud.com",
   "bilibili.com", "nicovideo.jp", "streamable.com",
 ];
+
+// HLS/DASH manifests are playlists, not files — downloading one over HTTP just
+// saves a few KB of text. They have to go through yt-dlp, which fetches the
+// segments and muxes them.
+function isStreamManifest(url) {
+  return /\.(m3u8|mpd)(\?|#|$)/i.test(url || "");
+}
 
 function isVideoSite(url) {
   const h = hostOf(url).toLowerCase();

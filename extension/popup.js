@@ -94,16 +94,22 @@ function render(items) {
     const row = document.createElement("div");
     row.className = "item";
     row.innerHTML = `
-      <span class="tag">${TYPE_LABEL[it.type] || "BIN"}</span>
+      <span class="tag">${isStreamManifest(it.url) ? "HLS" : TYPE_LABEL[it.type] || "BIN"}</span>
       <div class="meta">
         <div class="name" title="${escapeAttr(it.url)}">${escapeHtml(it.filename)}</div>
-        <div class="sub">${it.type} · ${fmtSize(it.size)}</div>
+        <div class="sub">${isStreamManifest(it.url) ? "stream · via yt-dlp" : `${it.type} · ${fmtSize(it.size)}`}</div>
       </div>
       <button class="dl">Download</button>`;
     row.querySelector(".dl").addEventListener("click", async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true; btn.textContent = "Sent";
-      await chrome.runtime.sendMessage({ type: "download", url: it.url, referer });
+      await chrome.runtime.sendMessage({
+        type: "download",
+        url: it.url,
+        referer,
+        // A manifest must be handed to yt-dlp or we would save the playlist.
+        video: isStreamManifest(it.url),
+      });
     });
     listEl.appendChild(row);
   }

@@ -75,7 +75,8 @@ async function maybeDetect(details) {
   // Type must be enabled, and size must clear the floor (unless the server
   // sent no length — common for streams, which we still want to surface).
   if (!settings.types[type]) return;
-  if (length && length < settings.minSizeKb * 1024) return;
+  // A manifest is tiny by nature; the size floor would always reject it.
+  if (!isStreamManifest(details.url) && length && length < settings.minSizeKb * 1024) return;
 
   // An explicit attachment is always worth showing; otherwise require it to be
   // media or a sizeable binary, so ordinary page images/scripts don't flood.
@@ -105,8 +106,28 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status === "complete" && tab && tab.url && isVideoSite(tab.url)) {
     chrome.action.setBadgeText({ tabId, text: "▶" });
     chrome.action.setBadgeBackgroundColor({ tabId, color: "#ef4444" });
+    void offerPanel(tabId, tab);
   }
 });
+
+/// Put the in-page button on a video page, injecting the content script first
+/// (no static content_scripts entry, so nothing runs on pages we never use).
+async function offerPanel(tabId, tab) {
+  const settings = await getSettings();
+  if (!settings.enabled || !settings.showPanel) return;
+  if (isExcluded(tab.url, settings)) return;
+
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+    await chrome.tabs.sendMessage(tabId, {
+      type: "showPanel",
+      url: tab.url,
+      label: videoTitle(tab.title) ? "Download this video" : "Download with fetchd",
+    });
+  } catch {
+    // Restricted page (store, PDF viewer, other extensions) — no panel there.
+  }
+}
 chrome.tabs.onRemoved.addListener((tabId) => clearDetected(tabId));
 
 // ---------------------------------------------------------------------------
@@ -122,6 +143,10 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.create({
       id: "fetchd-video", title: "Download video with fetchd (yt-dlp)",
       contexts: ["page", "link", "video"],
+    });
+    chrome.contextMenus.create({
+      id: "fetchd-selection", title: "Download links in selection with fetchd",
+      contexts: ["selection"],
     });
     chrome.contextMenus.create({
       id: "fetchd-all-links", title: "Download all links on this page",
@@ -144,6 +169,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     // (yt-dlp resolves the video from a watch page).
     const url = info.linkUrl || info.srcUrl || info.pageUrl || (tab && tab.url);
     if (url) await sendOne(url, referer, true, videoTitle(tab && tab.title));
+  } else if (info.menuItemId === "fetchd-selection") {
+    await grabFromPage(tab, "selection", referer);
   } else if (info.menuItemId === "fetchd-all-links") {
     await grabFromPage(tab, "links", referer);
   } else if (info.menuItemId === "fetchd-all-images") {
@@ -155,14 +182,25 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // type is enabled in settings.
 async function grabFromPage(tab, mode, referer) {
   if (!tab) return;
+  const label = mode === "selection" ? "links in the selection" : mode;
   let results;
   try {
     results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: (m) => {
-        const sel = m === "images" ? "img[src]" : "a[href]";
+        if (m === "selection") {
+          // Only anchors inside the highlighted range.
+          const sel = window.getSelection();
+          if (!sel || sel.isCollapsed) return [];
+          const range = sel.getRangeAt(0);
+          return Array.from(document.querySelectorAll("a[href]"))
+            .filter((a) => range.intersectsNode(a))
+            .map((a) => a.href)
+            .filter((u) => /^https?:/i.test(u));
+        }
+        const q = m === "images" ? "img[src]" : "a[href]";
         const attr = m === "images" ? "src" : "href";
-        return Array.from(document.querySelectorAll(sel))
+        return Array.from(document.querySelectorAll(q))
           .map((el) => el[attr])
           .filter((u) => /^https?:/i.test(u));
       },
@@ -182,12 +220,14 @@ async function grabFromPage(tab, mode, referer) {
   });
 
   if (!wanted.length) {
-    notify("Nothing to download", `No matching ${mode} found on this page.`);
+    notify("Nothing to download", `No matching ${label} found.`);
     return;
   }
   let ok = 0;
-  for (const u of wanted) if (await sendToFetchd(u, referer, false, false)) ok++;
-  notify("Sent to fetchd", `${ok} of ${wanted.length} ${mode} queued.`);
+  for (const u of wanted) {
+    if (await sendToFetchd(u, referer, isStreamManifest(u), false)) ok++;
+  }
+  notify("Sent to fetchd", `${ok} of ${wanted.length} ${label} queued.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +275,14 @@ chrome.downloads.onCreated.addListener(async (item) => {
   notify("Sent to fetchd", filenameFromUrl(url));
 });
 
+// Keyboard shortcut: grab the current page's video without reaching for a menu.
+chrome.commands?.onCommand.addListener(async (command) => {
+  if (command !== "grab-video") return;
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.url) return;
+  await sendOne(tab.url, tab.url, true, videoTitle(tab.title));
+});
+
 // ---------------------------------------------------------------------------
 // Messages from popup
 // ---------------------------------------------------------------------------
@@ -248,7 +296,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     } else if (msg.type === "downloadAll") {
       const items = await getDetected(msg.tabId);
       let ok = 0;
-      for (const it of items) if (await sendToFetchd(it.url, msg.referer, false, false)) ok++;
+      for (const it of items) {
+        if (await sendToFetchd(it.url, msg.referer, isStreamManifest(it.url), false)) ok++;
+      }
       sendResponse({ ok, total: items.length });
     } else if (msg.type === "clear") {
       await clearDetected(msg.tabId);

@@ -26,6 +26,17 @@ const VIDEO_HOSTS: &[&str] = &[
     "bilibili.com", "nicovideo.jp", "streamable.com",
 ];
 
+/// HLS/DASH manifests are playlists, not files: fetching one over HTTP saves a
+/// few KB of text. They must go through yt-dlp, which pulls the segments and
+/// muxes them.
+pub fn is_stream_manifest(url: &str) -> bool {
+    let path = match reqwest::Url::parse(url) {
+        Ok(u) => u.path().to_ascii_lowercase(),
+        Err(_) => return false,
+    };
+    path.ends_with(".m3u8") || path.ends_with(".mpd")
+}
+
 pub fn is_video_site(url: &str) -> bool {
     let host = match reqwest::Url::parse(url) {
         Ok(u) => u.host_str().unwrap_or("").to_ascii_lowercase(),
@@ -330,6 +341,16 @@ fn num_u64(s: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_stream_manifests() {
+        assert!(is_stream_manifest("https://e.test/live/x36xhzz.m3u8"));
+        assert!(is_stream_manifest("https://e.test/v.mpd?token=abc"));
+        assert!(!is_stream_manifest("https://e.test/video.mp4"));
+        // Only the path counts, not a query string that merely mentions it.
+        assert!(!is_stream_manifest("https://e.test/get?f=movie.m3u8.txt"));
+        assert!(!is_stream_manifest("not a url"));
+    }
 
     #[test]
     fn detects_video_hosts() {

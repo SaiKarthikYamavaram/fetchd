@@ -780,6 +780,26 @@ pub async fn prepare(
     let final_path = resolve_unique_path(dest_dir, &info.filename);
     let part = part_path(&final_path);
 
+    // Claim the name now by creating the `.part`. `resolve_unique_path` treats
+    // an existing `.part` as taken, so without this two adds started before
+    // either begins transferring would pick the same name and write the same
+    // file. `create_new` fails if someone won the race first, so re-resolve.
+    let (final_path, part) = match tokio::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&part)
+        .await
+    {
+        Ok(_) => (final_path, part),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let retry = resolve_unique_path(dest_dir, &info.filename);
+            let retry_part = part_path(&retry);
+            let _ = tokio::fs::File::create(&retry_part).await;
+            (retry, retry_part)
+        }
+        Err(e) => return Err(format!("cannot create {}: {e}", part.display())),
+    };
+
     let ranges = match info.total {
         Some(total) if info.supports_ranges => plan_segments(total, segments),
         _ => Vec::new(),
@@ -1631,6 +1651,25 @@ mod tests {
             std::fs::read(&reference).unwrap(),
             "segmented output differs from single-connection output"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Two adds racing for the same URL must not resolve to the same file.
+    /// Before the `.part` was reserved in `prepare`, both saw a free name.
+    #[tokio::test]
+    #[ignore]
+    async fn network_concurrent_prepares_get_distinct_paths() {
+        let dir = scratch("race");
+        let (client, _) = clients();
+
+        let (a, b) = tokio::join!(
+            prepare(&client, SMALL, &dir, 8),
+            prepare(&client, SMALL, &dir, 8),
+        );
+        let (a, b) = (a.unwrap(), b.unwrap());
+
+        assert_ne!(a.final_path, b.final_path, "both adds claimed the same file");
+        assert_ne!(a.part_path, b.part_path, "both adds claimed the same .part");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -26,6 +26,10 @@ use crate::state::{self, AppState, ConfirmRequest, PendingAdd};
 /// Fixed port so the extension has a constant target. Bound to loopback only.
 pub const PORT: u16 = 47831;
 
+/// Threads serving `/add`. Each can block for seconds on a metadata probe, so
+/// a few give batch grabs some parallelism without unbounded spawning.
+const ADD_WORKERS: usize = 4;
+
 /// The JSON the extension sends.
 #[derive(Debug, Deserialize)]
 struct AddRequest {
@@ -58,6 +62,26 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
         };
         eprintln!("fetchd: extension bridge listening on 127.0.0.1:{PORT}");
 
+        // A bounded pool rather than a thread per request: "download all links"
+        // fires one POST per link, and any local process can hit this endpoint,
+        // so unbounded spawning would be a cheap way to exhaust threads.
+        let (work_tx, work_rx) = std::sync::mpsc::channel::<(tiny_http::Request, String)>();
+        let work_rx = Arc::new(std::sync::Mutex::new(work_rx));
+        for _ in 0..ADD_WORKERS {
+            let rx = Arc::clone(&work_rx);
+            let app = app.clone();
+            let state = Arc::clone(&state);
+            std::thread::spawn(move || loop {
+                let job = { rx.lock().unwrap().recv() };
+                let Ok((request, body)) = job else { return };
+                let response = match handle_add(&app, &state, &body) {
+                    Ok(id) => cors(Response::from_string(id)),
+                    Err(e) => cors(Response::from_string(e).with_status_code(400)),
+                };
+                let _ = request.respond(response);
+            });
+        }
+
         for mut request in server.incoming_requests() {
             // Defence in depth: tiny_http is bound to loopback already, but a
             // request that somehow arrives from off-box is refused rather than
@@ -86,18 +110,12 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
                         let _ = request.respond(cors(Response::from_string("bad body").with_status_code(400)));
                         continue;
                     }
-                    // Handle on its own thread: a video /add blocks on a
-                    // ~15s yt-dlp metadata probe, and the accept loop must stay
-                    // free to answer /ping and other requests meanwhile.
-                    let app = app.clone();
-                    let state = Arc::clone(&state);
-                    std::thread::spawn(move || {
-                        let response = match handle_add(&app, &state, &body) {
-                            Ok(id) => cors(Response::from_string(id)),
-                            Err(e) => cors(Response::from_string(e).with_status_code(400)),
-                        };
-                        let _ = request.respond(response);
-                    });
+                    // Hand to the worker pool: a video /add blocks on a ~15s
+                    // yt-dlp metadata probe, and the accept loop must stay free
+                    // to answer /ping meanwhile.
+                    if work_tx.send((request, body)).is_err() {
+                        break; // workers gone; nothing left to serve
+                    }
                 }
                 _ => {
                     let _ = request.respond(cors(Response::empty(404)));
@@ -137,6 +155,7 @@ fn handle_add(app: &AppHandle, state: &Arc<AppState>, body: &str) -> Result<Stri
             url: url.clone(),
             session: Some(session),
             force_video,
+            added_at: crate::queue::now_secs(),
         });
         crate::show_main(&app);
         let _ = app.emit(

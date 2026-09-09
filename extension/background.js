@@ -206,13 +206,33 @@ chrome.downloads.onCreated.addListener(async (item) => {
   if (!type || !settings.types[type]) return;
   if (item.fileSize > 0 && item.fileSize < settings.minSizeKb * 1024) return;
 
+  // Check the app is reachable BEFORE cancelling. Cancelling first and then
+  // failing to hand over would destroy the download with nothing taking it up.
+  if (!(await fetchdAlive())) {
+    notify("fetchd not running", "Left this download to the browser.");
+    return;
+  }
+
   try {
     await chrome.downloads.cancel(item.id);
     await chrome.downloads.erase({ id: item.id });
   } catch {
     return; // already finished / uncancellable — don't double-download
   }
-  await sendOne(url, item.referrer || url);
+
+  const referer = item.referrer || url;
+  if (!(await sendToFetchd(url, referer))) {
+    // Handover failed after the browser download was cancelled; give it back
+    // rather than silently losing the file.
+    try {
+      await chrome.downloads.download({ url });
+      notify("fetchd did not accept it", "Restored the browser download.");
+    } catch {
+      notify("Download lost", "fetchd rejected it and the browser could not resume it.");
+    }
+    return;
+  }
+  notify("Sent to fetchd", filenameFromUrl(url));
 });
 
 // ---------------------------------------------------------------------------

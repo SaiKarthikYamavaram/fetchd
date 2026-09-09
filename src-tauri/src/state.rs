@@ -22,6 +22,9 @@ use crate::download::{self, Progress, Session};
 use crate::queue::{self, Download, Status};
 use crate::throttle::Throttle;
 
+/// How long an unanswered add-dialog request is kept before being swept.
+const PENDING_TTL_SECS: u64 = 60 * 30;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub download_dir: Option<PathBuf>,
@@ -91,6 +94,8 @@ pub struct PendingAdd {
     pub url: String,
     pub session: Option<Session>,
     pub force_video: bool,
+    /// When it was parked, so abandoned requests can be swept.
+    pub added_at: u64,
 }
 
 /// Emitted to the frontend to open the add dialog for a captured URL.
@@ -237,7 +242,12 @@ impl AppState {
         self.settings.lock().unwrap().clone()
     }
 
-    pub fn set_settings(&self, settings: Settings) {
+    pub fn set_settings(&self, mut settings: Settings) {
+        // Settings arrive over IPC; clamp them rather than trusting the UI.
+        // An out-of-range concurrency would have `pump` spawn that many
+        // transfers at once.
+        settings.max_concurrent = settings.max_concurrent.clamp(1, 16);
+        settings.segments = settings.segments.clamp(1, download::MAX_SEGMENTS);
         *self.settings.lock().unwrap() = settings;
         self.save_settings();
         self.rebuild_throttle();
@@ -419,7 +429,12 @@ impl AppState {
     /// the token the frontend sends back.
     pub fn stash_pending(&self, pending: PendingAdd) -> String {
         let token = format!("p{}", self.gen.fetch_add(1, Ordering::Relaxed));
-        self.pending.lock().unwrap().insert(token.clone(), pending);
+        let mut map = self.pending.lock().unwrap();
+        // A dialog closed by shutting the window never answers, so sweep
+        // anything abandoned rather than growing forever.
+        let now = queue::now_secs();
+        map.retain(|_, p| now.saturating_sub(p.added_at) < PENDING_TTL_SECS);
+        map.insert(token.clone(), pending);
         token
     }
 

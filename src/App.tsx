@@ -80,10 +80,23 @@ function App() {
 
   useEffect(() => {
     refresh();
-    const unlistenQueue = listen<DownloadView[]>("queue://changed", (e) => setRows(e.payload));
+    const unlistenQueue = listen<DownloadView[]>("queue://changed", (e) => {
+      setRows(e.payload);
+      // Drop per-download tracking for rows that no longer exist, or these maps
+      // grow for the life of the session.
+      const alive = new Set(e.payload.map((r) => r.id));
+      for (const map of [live.current, liveTotal.current, samples.current]) {
+        for (const id of map.keys()) if (!alive.has(id)) map.delete(id);
+      }
+    });
     // The extension can ask the app to confirm a capture before queuing it.
     const unlistenConfirm = listen<ConfirmRequest>("download://confirm", (e) => {
-      setPendingToken(e.payload.token);
+      // A second capture while a dialog is open replaces it; release the one
+      // being dropped so it is not parked on the backend forever.
+      setPendingToken((old) => {
+        if (old && old !== e.payload.token) api.cancelPending(old).catch(() => {});
+        return e.payload.token;
+      });
       setPendingUrl(e.payload.url);
     });
     const unlistenProgress = listen<ProgressRow>("download://progress", (event) => {

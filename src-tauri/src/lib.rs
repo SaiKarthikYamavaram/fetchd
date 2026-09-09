@@ -236,6 +236,19 @@ pub fn run() {
             // start the network stack may not be up yet, and firing straight
             // into a retry ladder would burn attempts on a link that is about
             // to work.
+            // One flusher for the whole queue: active downloads only mark it
+            // dirty, so progress is persisted with a single write per tick
+            // rather than one per download.
+            let flush_state = Arc::clone(&state);
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(2));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    interval.tick().await;
+                    flush_state.flush_if_dirty();
+                }
+            });
+
             tauri::async_runtime::spawn(async move {
                 // Apply the saved bandwidth cap now that we are on the runtime
                 // (Throttle spawns a refill task).

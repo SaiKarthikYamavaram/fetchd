@@ -162,6 +162,8 @@ pub struct AppState {
     throttle: Mutex<Throttle>,
     /// Captured-but-unconfirmed adds, keyed by token (see `PendingAdd`).
     pending: Mutex<HashMap<String, PendingAdd>>,
+    /// Set when progress moved; a single flusher persists it (see `mark_dirty`).
+    dirty: std::sync::atomic::AtomicBool,
     data_dir: PathBuf,
     config_dir: PathBuf,
 }
@@ -196,6 +198,7 @@ impl AppState {
             // from a runtime context during setup.
             throttle: Mutex::new(Throttle::unlimited()),
             pending: Mutex::new(HashMap::new()),
+            dirty: std::sync::atomic::AtomicBool::new(false),
             data_dir,
             config_dir,
         })
@@ -409,6 +412,22 @@ impl AppState {
         }
     }
 
+    /// Note that progress changed without writing to disk.
+    ///
+    /// Every active download used to persist the whole queue (with an fsync)
+    /// on its own 2s checkpoint, so N downloads meant N full writes per tick.
+    /// They now just mark the queue dirty and one flusher does a single write.
+    pub fn mark_dirty(&self) {
+        self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Persist once if anything marked the queue dirty since the last flush.
+    pub fn flush_if_dirty(&self) {
+        if self.dirty.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            self.save_queue();
+        }
+    }
+
     pub fn save_queue(&self) {
         let snapshot = self.queue.lock().unwrap().clone();
         if let Err(e) = queue::save_json(&self.data_dir.join("queue.json"), &snapshot) {
@@ -536,9 +555,9 @@ impl AppState {
     /// file (and any leftover `.part`) from disk; otherwise the file is left in
     /// place and only the list entry goes.
     pub fn remove(&self, id: &str, delete_file: bool) {
-        let plan = {
+        let entry = {
             let queue = self.queue.lock().unwrap();
-            queue.iter().find(|d| d.id == id).map(|d| d.plan.clone())
+            queue.iter().find(|d| d.id == id).map(|d| (d.plan.clone(), d.status))
         };
 
         if let Some(active) = self.active.lock().unwrap().remove(id) {
@@ -546,9 +565,14 @@ impl AppState {
         }
         self.queue.lock().unwrap().retain(|d| d.id != id);
 
-        if delete_file {
-            if let Some(plan) = plan {
+        if let Some((plan, status)) = entry {
+            if delete_file {
                 delete_artifacts(&plan, false);
+            } else if status != Status::Completed {
+                // Keep a finished file, but a partial is useless once its queue
+                // entry is gone — and `prepare` reserves the `.part` up front,
+                // so even a never-started download has one to clean up.
+                delete_artifacts(&plan, true);
             }
         }
         self.save_queue();
@@ -580,6 +604,7 @@ impl AppState {
             active.token.cancel();
             self.record_progress(&id, active.progress.snapshot());
         }
+        self.dirty.store(false, std::sync::atomic::Ordering::Relaxed);
         self.save_queue();
     }
 
@@ -745,7 +770,7 @@ async fn run_http(
                     _ = token.cancelled() => break,
                     _ = interval.tick() => {
                         state.record_progress(&id, progress.snapshot());
-                        state.save_queue();
+                        state.mark_dirty();
                     }
                 }
             }
@@ -1125,9 +1150,13 @@ mod tests {
         };
         state.queue.lock().unwrap().push(Download::new("k".into(), plan));
 
-        // Remove from list, keep the file.
+        // Remove from list keeps the finished file but discards the partial:
+        // `prepare` reserves the `.part`, so it would otherwise be orphaned.
+        let part = dir.join("keep.bin.part");
+        std::fs::write(&part, b"partial").unwrap();
         state.remove("k", false);
         assert!(file.exists(), "remove without delete must keep the file");
+        assert!(!part.exists(), "remove must not orphan the .part");
         assert!(state.queue.lock().unwrap().is_empty());
 
         // Re-add and remove with delete.

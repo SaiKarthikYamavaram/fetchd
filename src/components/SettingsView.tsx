@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Settings } from "../lib/api";
+import { IconFolder } from "./icons";
 
 export function SettingsView() {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -60,13 +61,28 @@ export function SettingsView() {
 
       <label className="field">
         <span>Download folder</span>
-        <input
-          value={settings.download_dir ?? ""}
-          placeholder="~/Downloads"
-          onChange={(e) =>
-            update({ download_dir: e.currentTarget.value.trim() || null })
-          }
-        />
+        <div className="field-inline">
+          <input
+            value={settings.download_dir ?? ""}
+            placeholder="~/Downloads"
+            spellCheck={false}
+            onChange={(e) =>
+              update({ download_dir: e.currentTarget.value.trim() || null })
+            }
+          />
+          <button
+            type="button"
+            className="btn"
+            onClick={async () => {
+              const picked = await api.pickFolder(settings.download_dir ?? undefined);
+              // Commit immediately: a picked path is a deliberate choice, not
+              // mid-typing, so it should not wait on the debounce.
+              if (picked) update({ download_dir: picked }, true);
+            }}
+          >
+            <IconFolder /> Browse
+          </button>
+        </div>
       </label>
 
       <div className="field-row">

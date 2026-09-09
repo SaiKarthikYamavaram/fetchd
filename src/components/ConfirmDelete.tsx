@@ -1,5 +1,6 @@
 import { api, type DownloadView } from "../lib/api";
 import { IconTrash } from "./icons";
+import { useEscape } from "../lib/useEscape";
 
 /// Removing an entry has two distinct meanings, so ask which. "Remove from
 /// list" keeps the downloaded file; "Delete file too" erases it from disk.
@@ -12,6 +13,8 @@ export function ConfirmDelete({
   row: DownloadView;
   onClose: () => void;
 }) {
+  useEscape(onClose);
+
   const finished = row.status === "completed";
 
   function removeOnly() {

@@ -1,5 +1,6 @@
 import { api, formatBytes, formatDate, type DownloadView } from "../lib/api";
 import { IconOpen, IconFolder, IconCopy, IconX } from "./icons";
+import { useEscape } from "../lib/useEscape";
 
 /// Full detail for one download — the "properties" screen. Live progress is
 /// merged in from the parent so per-segment bars move while it runs.
@@ -16,6 +17,8 @@ export function DetailModal({
   speed: number;
   onClose: () => void;
 }) {
+  useEscape(onClose);
+
   const downloaded =
     row.status === "downloading" && liveBytes !== undefined ? liveBytes : row.downloaded;
   const total = row.total ?? liveTotal ?? null;

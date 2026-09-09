@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type AddOptions } from "../lib/api";
 import { IconFolder, IconDownload, IconX } from "./icons";
+import { useEscape } from "../lib/useEscape";
 
 /// Hosts fetchd routes to yt-dlp. Kept in sync with VIDEO_HOSTS in
 /// src-tauri/src/ytdlp.rs — used only to decide whether to offer the quality
@@ -43,6 +44,12 @@ export function AddDialog({
   const [error, setError] = useState<string | null>(null);
 
   const video = isVideoUrl(url);
+
+  // Escape must go through dismiss so a parked extension request is released.
+  useEscape(() => {
+    if (token) api.cancelPending(token).catch(() => {});
+    onClose();
+  });
 
   useEffect(() => {
     // Show the real default folder rather than a vague placeholder.

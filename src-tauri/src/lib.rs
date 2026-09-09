@@ -236,6 +236,28 @@ pub fn run() {
             // start the network stack may not be up yet, and firing straight
             // into a retry ladder would burn attempts on a link that is about
             // to work.
+            // Scheduler: reopen the queue when the window starts, and stop
+            // transfers when it ends. Checked once a minute — the window has
+            // minute resolution, so anything finer is wasted wakeups.
+            let sched_state = Arc::clone(&state);
+            let sched_app = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(60));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                let mut was_open = true;
+                loop {
+                    interval.tick().await;
+                    let open = state::within_schedule(&sched_state.settings());
+                    if open {
+                        state::pump(&sched_app, &sched_state);
+                    } else if was_open {
+                        sched_state.suspend_for_schedule();
+                        state::emit_queue(&sched_app, &sched_state);
+                    }
+                    was_open = open;
+                }
+            });
+
             // One flusher for the whole queue: active downloads only mark it
             // dirty, so progress is persisted with a single write per tick
             // rather than one per download.

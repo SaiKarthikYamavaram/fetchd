@@ -55,6 +55,23 @@ pub struct Settings {
     /// "audio" (extract to mp3).
     #[serde(default)]
     pub video_quality: String,
+    /// Proxy URL for every download, e.g. "http://host:8080" or
+    /// "socks5://host:1080". Empty means direct.
+    #[serde(default)]
+    pub proxy: String,
+    /// Sort finished downloads into per-type sub-folders (Video, Audio, ...)
+    /// of the download folder. Ignored when a location is picked per download.
+    #[serde(default)]
+    pub categorize: bool,
+    /// Only transfer inside a daily time window.
+    #[serde(default)]
+    pub schedule_enabled: bool,
+    /// Window bounds as "HH:MM" local time. A stop earlier than the start means
+    /// the window runs over midnight (e.g. 23:00-06:00).
+    #[serde(default)]
+    pub schedule_start: String,
+    #[serde(default)]
+    pub schedule_stop: String,
 }
 
 impl Default for Settings {
@@ -70,6 +87,11 @@ impl Default for Settings {
             ytdlp_path: String::new(),
             cookies_browser: String::new(),
             video_quality: "best".into(),
+            proxy: String::new(),
+            categorize: false,
+            schedule_enabled: false,
+            schedule_start: "01:00".into(),
+            schedule_stop: "07:00".into(),
         }
     }
 }
@@ -214,12 +236,16 @@ impl AppState {
     /// against the URL. The extension path is the one that gets past an
     /// interactive challenge; the file is the manual equivalent.
     pub fn session_for(&self, url: &str, captured: Option<Session>) -> Session {
-        if let Some(session) = captured {
+        if let Some(mut session) = captured {
+            // The extension knows nothing about the proxy setting.
+            let proxy = self.settings().proxy;
+            session.proxy = Some(proxy).filter(|p| !p.is_empty());
             return session;
         }
 
         let settings = self.settings();
         let mut session = Session::with_agent(settings.user_agent.clone());
+        session.proxy = Some(settings.proxy.clone()).filter(|p| !p.is_empty());
 
         if let Some(path) = &settings.cookies_file {
             if let Ok(parsed) = reqwest::Url::parse(url) {
@@ -479,11 +505,15 @@ impl AppState {
         opts: AddOptions,
     ) -> Result<String, String> {
         // A per-download location from the add dialog wins over the default.
-        let dir = match opts.dir.as_deref().filter(|d| !d.trim().is_empty()) {
+        let explicit_dir = opts.dir.as_deref().filter(|d| !d.trim().is_empty());
+        let dir = match explicit_dir {
             Some(d) => PathBuf::from(d),
             None => self.download_dir(app)?,
         };
         let settings = self.settings();
+        // A folder chosen for this download is taken literally; category
+        // sorting only shapes the default location.
+        let categorize = settings.categorize && explicit_dir.is_none();
         let session = self.session_for(url, captured.clone());
 
         let plan = if force_video || crate::ytdlp::is_video_site(url) {
@@ -494,11 +524,25 @@ impl AppState {
                 file: settings.cookies_file.clone(),
                 browser: if settings.cookies_browser.is_empty() { None } else { Some(settings.cookies_browser.clone()) },
             };
-            let (title, thumbnail) = crate::ytdlp::resolve_meta(&ytdlp, url, &cookies).await;
+            let proxy = Some(settings.proxy.as_str()).filter(|p| !p.is_empty());
+            let (title, thumbnail) =
+                crate::ytdlp::resolve_meta(&ytdlp, url, &cookies, proxy).await;
+            // yt-dlp names the file itself, so the category is decided by the
+            // chosen quality rather than an extension.
+            let dir = if categorize {
+                let bucket = if opts.quality.as_deref().unwrap_or(&settings.video_quality) == "audio" {
+                    "Audio"
+                } else {
+                    "Video"
+                };
+                dir.join(bucket)
+            } else {
+                dir
+            };
             download::video_plan(url, &dir, title, thumbnail)?
         } else {
             let (client, _) = self.clients_for(&session)?;
-            download::prepare(&client, url, &dir, settings.segments).await?
+            download::prepare(&client, url, &dir, settings.segments, categorize).await?
         };
 
         let id = self.next_id();
@@ -608,6 +652,27 @@ impl AppState {
         self.save_queue();
     }
 
+    /// Stop active transfers because the scheduled window closed.
+    ///
+    /// They go back to `Queued`, not `Paused`: pausing is a user decision that
+    /// must survive, whereas these should resume by themselves when the window
+    /// reopens. Partial files are kept, so this costs nothing but a reconnect.
+    pub fn suspend_for_schedule(&self) {
+        let active: Vec<(String, Active)> = {
+            let mut map = self.active.lock().unwrap();
+            map.drain().collect()
+        };
+        if active.is_empty() {
+            return;
+        }
+        for (id, a) in active {
+            a.token.cancel();
+            self.record_progress(&id, a.progress.snapshot());
+            self.set_status(&id, Status::Queued, None);
+        }
+        self.save_queue();
+    }
+
     pub fn clear_history(&self) {
         self.queue.lock().unwrap().retain(|d| !d.is_terminal());
         self.save_queue();
@@ -639,7 +704,14 @@ impl AppState {
 /// status and calls it. `Interrupted` is included because that is exactly the
 /// state an unclean shutdown leaves behind, and the plan says it auto-resumes.
 pub fn pump(app: &AppHandle, state: &Arc<AppState>) {
-    let max = state.settings().max_concurrent.max(1);
+    let settings = state.settings();
+    // Outside the scheduled window nothing new starts; entries stay Queued and
+    // the scheduler tick picks them up when the window opens.
+    if !within_schedule(&settings) {
+        emit_queue(app, state);
+        return;
+    }
+    let max = settings.max_concurrent.max(1);
 
     // The claim in `claim_next` marks each entry Downloading under the queue
     // lock, so a second pump racing this one (e.g. one from a paused task's
@@ -875,6 +947,13 @@ async fn run_video(
     // yt-dlp fetches a video stream and then an audio stream, restarting its
     // byte counter for each. Reported raw, the bar would run 0->100% twice.
     // Accumulate finished phases so the figures only ever move forward.
+    //
+    // On a resume yt-dlp's count already includes the bytes already on disk
+    // (verified: it logs "Resuming download at byte N" and reports N+), so no
+    // offset is added. But resuming *after* the video stream finished reports
+    // only the audio stream, which is below what was persisted — so never
+    // report less than the progress we started with.
+    let floor = progress.total();
     let base_done = Arc::new(AtomicU64::new(0));
     let last_done = Arc::new(AtomicU64::new(0));
     let base_total = Arc::new(AtomicU64::new(0));
@@ -887,6 +966,7 @@ async fn run_video(
         &cookies,
         &quality,
         limit_kb,
+        Some(settings.proxy.as_str()).filter(|p| !p.is_empty()),
         token,
         move |t| {
             // A drop in the reported byte count means yt-dlp moved on to the
@@ -900,8 +980,10 @@ async fn run_video(
                 last_total.store(total, Ordering::Relaxed);
             }
 
-            let downloaded = base_done.load(Ordering::Relaxed) + t.downloaded;
-            let total = t.total.map(|tt| base_total.load(Ordering::Relaxed) + tt);
+            let downloaded = (base_done.load(Ordering::Relaxed) + t.downloaded).max(floor);
+            let total = t
+                .total
+                .map(|tt| (base_total.load(Ordering::Relaxed) + tt).max(downloaded));
 
             prog.set_absolute(downloaded);
             if let Some(total) = total {
@@ -1106,7 +1188,50 @@ mod tests {
         assert_eq!(status_of(&state, "y"), Status::Paused);
     }
 
-    /// The add dialog's payload must deserialize exactly as the frontend sends
+    fn sched(start: &str, stop: &str) -> Settings {
+        Settings {
+            schedule_enabled: true,
+            schedule_start: start.into(),
+            schedule_stop: stop.into(),
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn schedule_window_parsing_and_wrap() {
+        assert_eq!(parse_hm("07:30"), Some(450));
+        assert_eq!(parse_hm(" 23:59 "), Some(1439));
+        assert_eq!(parse_hm("24:00"), None);
+        assert_eq!(parse_hm("07:60"), None);
+        assert_eq!(parse_hm("bogus"), None);
+
+        // Disabled means always allowed.
+        assert!(within_schedule(&Settings::default()));
+
+        // Unparseable bounds must not stall the queue forever.
+        assert!(within_schedule(&sched("nope", "07:00")));
+        // A zero-width window is treated as always on, not never.
+        assert!(within_schedule(&sched("03:00", "03:00")));
+    }
+
+    /// The wrap case is the one that is easy to get wrong: 23:00-06:00 is a
+    /// single overnight window, not an empty one.
+    #[test]
+    fn schedule_window_boundaries() {
+        // Same-day window 09:00-17:00.
+        let day = sched("09:00", "17:00");
+        for (now, want) in [(0, false), (539, false), (540, true), (1019, true), (1020, false)] {
+            assert_eq!(in_window(&day, now), want, "same-day at minute {now}");
+        }
+
+        // Overnight window 23:00-06:00.
+        let night = sched("23:00", "06:00");
+        for (now, want) in [(1379, false), (1380, true), (1439, true), (0, true), (359, true), (360, false)] {
+            assert_eq!(in_window(&night, now), want, "overnight at minute {now}");
+        }
+    }
+
+        /// The add dialog's payload must deserialize exactly as the frontend sends
     /// it; a field-name mismatch here would silently drop the chosen folder.
     #[test]
     fn add_options_deserialize_from_dialog_payload() {
@@ -1176,5 +1301,73 @@ mod tests {
         assert!(!file.exists(), "remove with delete must erase the file");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// Minutes since local midnight, or `None` where the platform clock cannot be
+/// read (non-unix; the scheduler then behaves as always-open).
+#[cfg(unix)]
+fn local_minutes() -> Option<u32> {
+    // SAFETY: `localtime_r` writes into a zeroed `tm` we own, and `time` takes
+    // a null pointer to mean "return the value".
+    unsafe {
+        let t = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&t, &mut tm).is_null() {
+            return None;
+        }
+        Some(tm.tm_hour as u32 * 60 + tm.tm_min as u32)
+    }
+}
+
+#[cfg(not(unix))]
+fn local_minutes() -> Option<u32> {
+    None
+}
+
+/// Parse "HH:MM" into minutes since midnight.
+fn parse_hm(value: &str) -> Option<u32> {
+    let (h, m) = value.trim().split_once(':')?;
+    let h: u32 = h.trim().parse().ok()?;
+    let m: u32 = m.trim().parse().ok()?;
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some(h * 60 + m)
+}
+
+/// Whether transfers are allowed right now.
+///
+/// A stop time earlier than the start wraps past midnight, so "23:00-06:00" is
+/// a single overnight window rather than an empty one. Anything unparseable
+/// leaves downloads running rather than silently stalling the queue.
+pub fn within_schedule(settings: &Settings) -> bool {
+    if !settings.schedule_enabled {
+        return true;
+    }
+    let Some(now) = local_minutes() else {
+        return true;
+    };
+    in_window(settings, now)
+}
+
+/// The window test with the clock injected, so the boundaries are testable.
+fn in_window(settings: &Settings, now: u32) -> bool {
+    if !settings.schedule_enabled {
+        return true;
+    }
+    let (Some(start), Some(stop)) = (
+        parse_hm(&settings.schedule_start),
+        parse_hm(&settings.schedule_stop),
+    ) else {
+        return true;
+    };
+    if start == stop {
+        return true; // degenerate window: treat as always on
+    }
+    if start < stop {
+        now >= start && now < stop
+    } else {
+        now >= start || now < stop
     }
 }

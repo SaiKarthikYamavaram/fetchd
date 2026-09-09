@@ -57,7 +57,12 @@ pub struct Tick {
 /// Resolve a video's title and thumbnail URL without downloading, so the row
 /// can show the real name and a preview immediately. Best-effort: any failure
 /// or a slow site returns `(None, None)` and the download still proceeds.
-pub async fn resolve_meta(ytdlp: &str, url: &str, cookies: &Cookies) -> (Option<String>, Option<String>) {
+pub async fn resolve_meta(
+    ytdlp: &str,
+    url: &str,
+    cookies: &Cookies,
+    proxy: Option<&str>,
+) -> (Option<String>, Option<String>) {
     let mut cmd = Command::new(ytdlp);
     cmd.arg("--skip-download")
         .arg("--no-playlist")
@@ -68,6 +73,9 @@ pub async fn resolve_meta(ytdlp: &str, url: &str, cookies: &Cookies) -> (Option<
         (Some(path), _) => { cmd.arg("--cookies").arg(path); }
         (None, Some(b)) if !b.is_empty() => { cmd.arg("--cookies-from-browser").arg(b); }
         _ => {}
+    }
+    if let Some(p) = proxy.filter(|p| !p.is_empty()) {
+        cmd.arg("--proxy").arg(p);
     }
     cmd.arg(url).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
 
@@ -119,6 +127,7 @@ pub async fn run<F, G>(
     cookies: &Cookies,
     quality: &str,
     limit_kb: Option<u64>,
+    proxy: Option<&str>,
     token: CancellationToken,
     on_progress: F,
     on_file: G,
@@ -162,6 +171,9 @@ where
 
     if let Some(rate) = limit_kb.filter(|r| *r > 0) {
         cmd.arg("--limit-rate").arg(format!("{rate}K"));
+    }
+    if let Some(p) = proxy.filter(|p| !p.is_empty()) {
+        cmd.arg("--proxy").arg(p);
     }
 
     cmd.arg(url);

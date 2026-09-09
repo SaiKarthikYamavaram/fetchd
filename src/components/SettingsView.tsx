@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Settings } from "../lib/api";
 import { IconFolder } from "./icons";
+import { applyTheme } from "../lib/theme";
 
 export function SettingsView() {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -85,6 +86,15 @@ export function SettingsView() {
         </div>
       </label>
 
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={settings.categorize}
+          onChange={(e) => update({ categorize: e.currentTarget.checked }, true)}
+        />
+        <span>Sort into folders by type (Video, Audio, Archives, …)</span>
+      </label>
+
       <div className="field-row">
         <label className="field">
           <span>Concurrent downloads</span>
@@ -116,6 +126,22 @@ export function SettingsView() {
       </div>
 
       <label className="field">
+        <span>Appearance</span>
+        <select
+          value={settings.theme || "system"}
+          onChange={(e) => {
+            const theme = e.currentTarget.value;
+            applyTheme(theme); // repaint now, don't wait for the round trip
+            update({ theme }, true);
+          }}
+        >
+          <option value="system">Match system</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+
+      <label className="field">
         <span>Speed limit (KB/s, 0 = unlimited)</span>
         <input
           type="number"
@@ -127,6 +153,59 @@ export function SettingsView() {
           }
         />
       </label>
+
+      <label className="field">
+        <span>Proxy (blank = direct)</span>
+        <input
+          value={settings.proxy}
+          placeholder="http://host:8080  or  socks5://host:1080"
+          spellCheck={false}
+          onChange={(e) => update({ proxy: e.currentTarget.value.trim() })}
+        />
+      </label>
+      <p className="help">
+        Applies to file downloads and to yt-dlp. Takes effect on the next
+        download; transfers already running keep their current connection.
+      </p>
+
+      <hr />
+
+      <h3>Schedule</h3>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={settings.schedule_enabled}
+          onChange={(e) => update({ schedule_enabled: e.currentTarget.checked }, true)}
+        />
+        <span>Only download during a set time window</span>
+      </label>
+      {settings.schedule_enabled && (
+        <>
+          <div className="field-row">
+            <label className="field">
+              <span>Start</span>
+              <input
+                type="time"
+                value={settings.schedule_start || "01:00"}
+                onChange={(e) => update({ schedule_start: e.currentTarget.value }, true)}
+              />
+            </label>
+            <label className="field">
+              <span>Stop</span>
+              <input
+                type="time"
+                value={settings.schedule_stop || "07:00"}
+                onChange={(e) => update({ schedule_stop: e.currentTarget.value }, true)}
+              />
+            </label>
+          </div>
+          <p className="help">
+            A stop time earlier than the start runs overnight (23:00–06:00 is one
+            window). Outside it, downloads wait as <em>Queued</em> and resume by
+            themselves when the window opens — partial files are kept.
+          </p>
+        </>
+      )}
 
       <hr />
 

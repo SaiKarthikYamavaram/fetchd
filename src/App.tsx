@@ -10,6 +10,7 @@ import {
   type Status,
 } from "./lib/api";
 import { SettingsView } from "./components/SettingsView";
+import { applyTheme } from "./lib/theme";
 import { DetailModal } from "./components/DetailModal";
 import { ConfirmDelete } from "./components/ConfirmDelete";
 import { AddDialog } from "./components/AddDialog";
@@ -76,6 +77,11 @@ function App() {
     } catch (e) {
       setError(String(e));
     }
+  }, []);
+
+  // Theme is stored in settings, so apply the saved choice on startup.
+  useEffect(() => {
+    api.getSettings().then((s) => applyTheme(s.theme)).catch(() => {});
   }, []);
 
   useEffect(() => {

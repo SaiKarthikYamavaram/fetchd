@@ -42,6 +42,11 @@ export type Settings = {
   ytdlp_path: string;
   cookies_browser: string;
   video_quality: string;
+  proxy: string;
+  categorize: boolean;
+  schedule_enabled: boolean;
+  schedule_start: string;
+  schedule_stop: string;
 };
 
 /// Payload of `download://confirm`: a captured URL awaiting the add dialog.

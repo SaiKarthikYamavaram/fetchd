@@ -136,6 +136,8 @@ fn handle_add(app: &AppHandle, state: &Arc<AppState>, body: &str) -> Result<Stri
             .unwrap_or_else(|| crate::download::USER_AGENT.to_string()),
         cookie: req.cookie.filter(|s| !s.is_empty()),
         referer: req.referer.filter(|s| !s.is_empty()),
+        // Filled in from settings by `session_for`.
+        proxy: None,
     };
 
     // Hand off to the same async path the UI uses. The bridge thread is

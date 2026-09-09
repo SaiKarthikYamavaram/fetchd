@@ -74,6 +74,9 @@ pub struct Session {
     pub user_agent: String,
     pub cookie: Option<String>,
     pub referer: Option<String>,
+    /// Proxy URL applied to both clients; `None` is a direct connection.
+    #[serde(default)]
+    pub proxy: Option<String>,
 }
 
 impl Default for Session {
@@ -82,6 +85,7 @@ impl Default for Session {
             user_agent: USER_AGENT.to_string(),
             cookie: None,
             referer: None,
+            proxy: None,
         }
     }
 }
@@ -173,7 +177,10 @@ fn describe_http_error(status: StatusCode, headers: &reqwest::header::HeaderMap)
 /// automatic decompression desyncs the stream from the `Content-Length` and
 /// `Content-Range` byte offsets that seek-writes depend on.
 pub fn build_client(session: &Session) -> Result<Client, String> {
-    Client::builder()
+    apply_proxy(
+        Client::builder(),
+        session,
+    )
         .user_agent(session.user_agent.clone())
         .default_headers(browser_headers(session))
         .connect_timeout(Duration::from_secs(10))
@@ -189,7 +196,10 @@ pub fn build_client(session: &Session) -> Result<Client, String> {
 /// connection. Eight segments sharing one socket share one congestion window,
 /// which is exactly what a download manager exists to avoid.
 pub fn build_segment_client(session: &Session) -> Result<Client, String> {
-    Client::builder()
+    apply_proxy(
+        Client::builder(),
+        session,
+    )
         .user_agent(session.user_agent.clone())
         .default_headers(browser_headers(session))
         .http1_only()
@@ -200,6 +210,36 @@ pub fn build_segment_client(session: &Session) -> Result<Client, String> {
         .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
         .build()
         .map_err(|e| format!("failed to build segment client: {e}"))
+}
+
+/// Route a client through the configured proxy, if any. An unparseable proxy
+/// URL is ignored rather than failing every download.
+fn apply_proxy(builder: reqwest::ClientBuilder, session: &Session) -> reqwest::ClientBuilder {
+    match session.proxy.as_deref().filter(|p| !p.is_empty()) {
+        Some(url) => match reqwest::Proxy::all(url) {
+            Ok(proxy) => builder.proxy(proxy),
+            Err(e) => {
+                eprintln!("fetchd: ignoring invalid proxy {url}: {e}");
+                builder
+            }
+        },
+        None => builder,
+    }
+}
+
+/// Sub-folder for a filename's type, used when category sorting is on.
+/// Mirrors the type buckets the UI and extension already use.
+pub fn category_for(filename: &str) -> &'static str {
+    let ext = filename.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "mp4" | "mkv" | "webm" | "avi" | "mov" | "flv" | "m4v" | "ts" => "Video",
+        "mp3" | "flac" | "wav" | "aac" | "ogg" | "m4a" | "opus" => "Audio",
+        "zip" | "tar" | "gz" | "xz" | "7z" | "rar" | "bz2" | "zst" => "Archives",
+        "pdf" | "doc" | "docx" | "epub" | "txt" | "odt" | "rtf" => "Documents",
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "avif" => "Images",
+        "iso" | "img" | "dmg" | "exe" | "appimage" | "deb" | "rpm" | "msi" => "Programs",
+        _ => "Other",
+    }
 }
 
 /// Reject anything that is not plain HTTP(S) before touching the network.
@@ -764,9 +804,20 @@ pub async fn prepare(
     url: &str,
     dest_dir: &Path,
     segments: u32,
+    categorize: bool,
 ) -> Result<DownloadPlan, String> {
     let parsed = validate_url(url)?;
     let info = probe(client, &parsed).await?;
+
+    // The type is only known once the probe has resolved a filename, so the
+    // category sub-folder is chosen here rather than by the caller.
+    let owned_dir;
+    let dest_dir = if categorize {
+        owned_dir = dest_dir.join(category_for(&info.filename));
+        owned_dir.as_path()
+    } else {
+        dest_dir
+    };
 
     tokio::fs::create_dir_all(dest_dir)
         .await
@@ -1547,6 +1598,19 @@ mod tests {
     }
 
     #[test]
+    fn categories_map_by_extension() {
+        assert_eq!(category_for("clip.MP4"), "Video");
+        assert_eq!(category_for("song.flac"), "Audio");
+        assert_eq!(category_for("archive.tar.gz"), "Archives");
+        assert_eq!(category_for("paper.pdf"), "Documents");
+        assert_eq!(category_for("shot.jpeg"), "Images");
+        assert_eq!(category_for("distro.iso"), "Programs");
+        // Unknown and extensionless both fall through to Other.
+        assert_eq!(category_for("data.xyz"), "Other");
+        assert_eq!(category_for("README"), "Other");
+    }
+
+    #[test]
     fn human_bytes_reads_sensibly() {
         assert_eq!(human_bytes(0), "0 KB");
         assert_eq!(human_bytes(512), "0.5 KB");
@@ -1586,7 +1650,7 @@ mod tests {
     where
         F: Fn(u64, Option<u64>) + Send + Sync + 'static,
     {
-        let plan = prepare(client, url, dest_dir, segments).await?;
+        let plan = prepare(client, url, dest_dir, segments, false).await?;
         let progress = Progress::new(plan.segment_count());
         run(client, segment_client, &plan, &progress, &Throttle::unlimited(), token, on_progress).await
     }
@@ -1663,8 +1727,8 @@ mod tests {
         let (client, _) = clients();
 
         let (a, b) = tokio::join!(
-            prepare(&client, SMALL, &dir, 8),
-            prepare(&client, SMALL, &dir, 8),
+            prepare(&client, SMALL, &dir, 8, false),
+            prepare(&client, SMALL, &dir, 8, false),
         );
         let (a, b) = (a.unwrap(), b.unwrap());
 
@@ -1756,7 +1820,7 @@ mod tests {
         let (client, seg) = clients();
         let total = 10 * 1024 * 1024u64;
 
-        let plan = prepare(&client, BIG, &dir, 8).await.unwrap();
+        let plan = prepare(&client, BIG, &dir, 8, false).await.unwrap();
         assert_eq!(plan.ranges.len(), 8, "expected a segmented plan");
 
         // First attempt: cancel it mid-flight.

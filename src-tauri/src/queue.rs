@@ -155,6 +155,124 @@ mod tests {
         assert_eq!(reconcile_on_launch(Status::Queued), Status::Queued);
     }
 
+    /// A queue.json written by an older build has no `session`, `quality` or
+    /// `name` key. Loading must fill them in rather than dropping the whole
+    /// file — which `load_json` would do silently, losing every download.
+    #[test]
+    fn queue_from_an_older_build_still_loads() {
+        let legacy = r#"[{
+            "id": "7",
+            "url": "https://example.com/a.zip",
+            "plan": {
+                "url": "https://example.com/a.zip",
+                "final_path": "/tmp/a.zip",
+                "part_path": "/tmp/a.zip.part",
+                "total": 100,
+                "supports_ranges": true,
+                "validator": null,
+                "ranges": [[0, 99]],
+                "engine": "http"
+            },
+            "status": "paused",
+            "done": [40],
+            "error": null,
+            "added_at": 1
+        }]"#;
+
+        let entries: Vec<Download> = serde_json::from_str(legacy).expect("legacy queue must load");
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].session.is_none());
+        assert!(entries[0].quality.is_none());
+        assert!(entries[0].name.is_none());
+        assert!(entries[0].plan.thumbnail.is_none());
+        assert_eq!(entries[0].downloaded(), 40);
+    }
+
+    #[test]
+    fn new_download_sizes_its_counters_to_the_plan() {
+        let plan = DownloadPlan {
+            url: "https://example.com/a.bin".into(),
+            final_path: "/tmp/a.bin".into(),
+            part_path: "/tmp/a.bin.part".into(),
+            total: Some(300),
+            supports_ranges: true,
+            validator: None,
+            ranges: vec![(0, 99), (100, 199), (200, 299)],
+            engine: crate::download::Engine::Http,
+            thumbnail: None,
+        };
+        let d = Download::new("1".into(), plan);
+        assert_eq!(d.done.len(), 3, "one counter per segment");
+        assert_eq!(d.downloaded(), 0);
+        assert_eq!(d.status, Status::Queued);
+        assert!(!d.is_terminal());
+
+        // A plan with no ranges (yt-dlp) still gets one counter, or every
+        // progress write would panic on an empty vector.
+        let video = DownloadPlan {
+            url: "https://example.com/v".into(),
+            final_path: "/tmp/v".into(),
+            part_path: "/tmp/v.part".into(),
+            total: None,
+            supports_ranges: false,
+            validator: None,
+            ranges: Vec::new(),
+            engine: crate::download::Engine::YtDlp,
+            thumbnail: None,
+        };
+        assert_eq!(Download::new("2".into(), video).done.len(), 1);
+    }
+
+    #[test]
+    fn only_finished_entries_are_terminal() {
+        for (status, terminal) in [
+            (Status::Queued, false),
+            (Status::Downloading, false),
+            (Status::Paused, false),
+            (Status::Interrupted, false),
+            (Status::Completed, true),
+            (Status::Failed, true),
+        ] {
+            let plan = DownloadPlan {
+                url: "https://example.com/a".into(),
+                final_path: "/tmp/a".into(),
+                part_path: "/tmp/a.part".into(),
+                total: None,
+                supports_ranges: false,
+                validator: None,
+                ranges: Vec::new(),
+                engine: crate::download::Engine::Http,
+                thumbnail: None,
+            };
+            let mut d = Download::new("1".into(), plan);
+            d.status = status;
+            assert_eq!(d.is_terminal(), terminal, "{status:?}");
+        }
+    }
+
+    /// `save_json` writes through a temp file. It must not leave that temp
+    /// behind, or the data directory fills with `queue.json.tmp` copies.
+    #[test]
+    fn save_leaves_no_temp_file_behind() {
+        let dir = std::env::temp_dir().join(format!("fetchd-tmpfile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("queue.json");
+
+        save_json(&path, &vec![1u8, 2, 3]).unwrap();
+        save_json(&path, &vec![4u8, 5]).unwrap();
+
+        assert!(!path.with_file_name("queue.json.tmp").exists());
+        assert_eq!(load_json::<Vec<u8>>(&path), Some(vec![4, 5]), "the second write wins");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_of_a_missing_file_is_none() {
+        let missing = std::env::temp_dir().join("fetchd-does-not-exist-ever.json");
+        let _ = std::fs::remove_file(&missing);
+        assert!(load_json::<Vec<Download>>(&missing).is_none());
+    }
+
     #[test]
     fn atomic_save_and_load_roundtrip() {
         let dir = std::env::temp_dir().join(format!("fetchd-queue-{}", std::process::id()));

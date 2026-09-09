@@ -30,10 +30,17 @@ const VIDEO_HOSTS: &[&str] = &[
 /// few KB of text. They must go through yt-dlp, which pulls the segments and
 /// muxes them.
 pub fn is_stream_manifest(url: &str) -> bool {
-    let path = match reqwest::Url::parse(url) {
-        Ok(u) => u.path().to_ascii_lowercase(),
+    let parsed = match reqwest::Url::parse(url) {
+        Ok(u) => u,
         Err(_) => return false,
     };
+    // Routing on this hands the URL to yt-dlp as a subprocess argument, so keep
+    // it to the same schemes `download::validate_url` allows rather than
+    // letting a `file://` path in through the video branch.
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
+    let path = parsed.path().to_ascii_lowercase();
     path.ends_with(".m3u8") || path.ends_with(".mpd")
 }
 
@@ -152,13 +159,7 @@ where
         .await
         .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
 
-    // A name from the add dialog fixes the stem; yt-dlp still chooses the
-    // container. `%` is the template's escape character, so double any in the
-    // user's text to keep it literal.
-    let out_tmpl = match name.map(|n| n.replace('%', "%%")) {
-        Some(stem) => format!("{}/{stem}.%(ext)s", dir.display()),
-        None => format!("{}/%(title)s [%(id)s].%(ext)s", dir.display()),
-    };
+    let out_tmpl = out_template(dir, name);
 
     let mut cmd = Command::new(ytdlp);
     cmd.arg("--newline")
@@ -327,6 +328,19 @@ fn parse_final(line: &str) -> Option<PathBuf> {
 
 /// Parse `downloaded|total|estimate|speed`, each a number or "NA". Total falls
 /// back to the estimate when the exact size is not yet known.
+/// yt-dlp's `-o` output template.
+///
+/// A name from the add dialog fixes the stem; yt-dlp still chooses the
+/// container. `%` is the template's escape character, so any in the user's
+/// text is doubled to keep it literal — otherwise "100% done" would be read as
+/// a field and mangle the filename.
+fn out_template(dir: &Path, name: Option<&str>) -> String {
+    match name.map(|n| n.replace('%', "%%")) {
+        Some(stem) => format!("{}/{stem}.%(ext)s", dir.display()),
+        None => format!("{}/%(title)s [%(id)s].%(ext)s", dir.display()),
+    }
+}
+
 fn parse_progress(s: &str) -> Option<Tick> {
     let mut it = s.split('|');
     let downloaded = num_u64(it.next()?)?;
@@ -398,6 +412,69 @@ mod tests {
         let t = parse_progress("500|NA|NA|NA").unwrap();
         assert_eq!(t.downloaded, 500);
         assert_eq!(t.total, None);
+    }
+
+    #[test]
+    fn manifest_detection_is_case_insensitive_and_path_only() {
+        assert!(is_stream_manifest("https://e.test/LIVE/STREAM.M3U8"));
+        assert!(is_stream_manifest("https://e.test/dash/manifest.MPD#t=10"));
+        // A manifest name in the middle of the path is not the resource.
+        assert!(!is_stream_manifest("https://e.test/x.m3u8/thumb.jpg"));
+        // Non-http schemes never reach yt-dlp through this check.
+        assert!(!is_stream_manifest("file:///tmp/x.m3u8"));
+    }
+
+    #[test]
+    fn video_host_matching_covers_subdomains_but_not_lookalikes() {
+        assert!(is_video_site("https://m.youtube.com/watch?v=abc"));
+        assert!(is_video_site("https://music.youtube.com/watch?v=abc"));
+        assert!(is_video_site("https://WWW.YouTube.COM/watch?v=abc"), "host match is case-insensitive");
+        // A suffix that is not on a label boundary must not match.
+        assert!(!is_video_site("https://evilyoutube.com/watch?v=abc"));
+        assert!(!is_video_site("https://youtube.com.evil.test/watch?v=abc"));
+    }
+
+    #[test]
+    fn unknown_quality_becomes_a_height_filter_not_a_crash() {
+        // Anything that is not "" / "best" / "audio" is treated as a height, so
+        // a stale or hand-edited value still produces a usable format string.
+        assert_eq!(
+            format_args("240"),
+            vec!["-f", "bv*[height<=?240]+ba/b[height<=?240]"]
+        );
+        // `<=?` keeps it a soft preference, so a garbage value cannot make
+        // yt-dlp fail to find any format at all.
+        assert!(format_args("nonsense")[1].contains("<=?nonsense"));
+    }
+
+    #[test]
+    fn progress_lines_that_are_not_progress_are_rejected() {
+        // A line with nothing parseable in the first field yields no tick.
+        assert!(parse_progress("NA|NA|NA|NA").is_none());
+        assert!(parse_progress("").is_none());
+        assert!(parse_progress("hello world").is_none());
+        // Short lines: missing trailing fields default to NA rather than panic.
+        let t = parse_progress("4096").unwrap();
+        assert_eq!(t.downloaded, 4096);
+        assert_eq!(t.total, None);
+        // A float byte count truncates rather than failing.
+        assert_eq!(parse_progress("1048576.9|NA|NA").unwrap().downloaded, 1_048_576);
+        // A total smaller than downloaded is passed through untouched; banking
+        // finished phases is the caller's job, not the parser's.
+        let t = parse_progress("900|100|NA").unwrap();
+        assert_eq!((t.downloaded, t.total), (900, Some(100)));
+    }
+
+    #[test]
+    fn output_template_escapes_percent_in_a_chosen_name() {
+        let dir = Path::new("/d");
+        // No name: yt-dlp's own title/id template.
+        assert_eq!(out_template(dir, None), "/d/%(title)s [%(id)s].%(ext)s");
+        // A chosen name fixes the stem and leaves the container to yt-dlp.
+        assert_eq!(out_template(dir, Some("My Video")), "/d/My Video.%(ext)s");
+        // A literal % must be doubled, or yt-dlp reads "%(e" as a field.
+        assert_eq!(out_template(dir, Some("100% done")), "/d/100%% done.%(ext)s");
+        assert_eq!(out_template(dir, Some("%(title)s")), "/d/%%(title)s.%(ext)s");
     }
 
     #[test]

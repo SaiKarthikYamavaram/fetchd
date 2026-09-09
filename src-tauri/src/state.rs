@@ -1010,6 +1010,7 @@ async fn run_http(
 
 /// The yt-dlp run: no checkpoint, no throttle, no segment clients. Cookies come
 /// from the manual file or a configured browser.
+#[allow(clippy::too_many_arguments)]
 async fn run_video(
     app: &AppHandle,
     state: &Arc<AppState>,
@@ -1265,6 +1266,451 @@ mod tests {
         state.queue.lock().unwrap().iter().find(|d| d.id == id).unwrap().status
     }
 
+    /// A plan pointing at real files in `dir`, so the disk-touching paths can
+    /// be exercised for real rather than mocked.
+    fn plan_in(dir: &std::path::Path, filename: &str) -> DownloadPlan {
+        DownloadPlan {
+            url: format!("https://example.com/{filename}"),
+            final_path: dir.join(filename),
+            part_path: dir.join(format!("{filename}.part")),
+            total: Some(1000),
+            supports_ranges: true,
+            validator: None,
+            ranges: vec![(0, 999)],
+            engine: crate::download::Engine::Http,
+            thumbnail: None,
+        }
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("fetchd-{name}-{}", uid()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    // -- progress and name bookkeeping --------------------------------------
+
+    /// yt-dlp reports a per-phase total: the video stream's size, then the
+    /// (much smaller) audio stream's. Taking the latest would shrink the bar's
+    /// denominator mid-download, so the recorded total only ever grows.
+    #[test]
+    fn total_only_ever_grows() {
+        let state = app();
+        push(&state, "t1");
+
+        state.set_total("t1", 5_000);
+        state.set_total("t1", 9_000);
+        state.set_total("t1", 1_200); // audio phase: must be ignored
+        assert_eq!(state.queue.lock().unwrap()[0].plan.total, Some(9_000));
+
+        // An unknown id is a no-op, not a panic.
+        state.set_total("nope", 1);
+    }
+
+    /// The display name changes while a yt-dlp download runs. It must replace
+    /// only the file name — moving the file to a different folder mid-transfer
+    /// would orphan the partial.
+    #[test]
+    fn display_name_keeps_the_directory() {
+        let state = app();
+        let dir = scratch("display");
+        state.queue.lock().unwrap().push(Download::new("d1".into(), plan_in(&dir, "placeholder")));
+
+        state.set_display_name("d1", "Real Title.mp4");
+        let path = state.queue.lock().unwrap()[0].plan.final_path.clone();
+        assert_eq!(path.parent().unwrap(), dir.as_path());
+        assert_eq!(path.file_name().unwrap(), "Real Title.mp4");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `set_final_path` reads the size off disk. A directory's metadata length
+    /// is the inode block size (4096 on ext4), so recording it would show a
+    /// failed video download as a completed 4 KB file.
+    #[test]
+    fn final_path_records_a_size_only_for_a_real_file() {
+        let state = app();
+        let dir = scratch("finalpath");
+        push(&state, "f1");
+
+        // yt-dlp errored before naming an output: the path falls back to the
+        // directory.
+        state.set_final_path("f1", dir.clone());
+        assert_eq!(state.queue.lock().unwrap()[0].plan.total, Some(1000), "unchanged");
+
+        // A path that does not exist at all is equally not a size.
+        state.set_final_path("f1", dir.join("ghost.mp4"));
+        assert_eq!(state.queue.lock().unwrap()[0].plan.total, Some(1000));
+
+        // A real file records its real length and marks the entry fully done.
+        let real = dir.join("video.mp4");
+        std::fs::write(&real, vec![7u8; 4242]).unwrap();
+        state.set_final_path("f1", real.clone());
+        {
+            let queue = state.queue.lock().unwrap();
+            assert_eq!(queue[0].plan.total, Some(4242));
+            assert_eq!(queue[0].downloaded(), 4242, "a completed row must not read 0 / total");
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // -- queue queries ------------------------------------------------------
+
+    /// The duplicate warning is about work in flight. A finished download of
+    /// the same URL is not a duplicate — asking for it again is a re-download.
+    #[test]
+    fn duplicate_check_ignores_finished_entries() {
+        let state = app();
+        push(&state, "u1");
+        let url = state.queue.lock().unwrap()[0].url.clone();
+
+        assert!(state.has_url(&url));
+        state.set_status("u1", Status::Completed, None);
+        assert!(!state.has_url(&url));
+        state.set_status("u1", Status::Failed, None);
+        assert!(!state.has_url(&url));
+        state.set_status("u1", Status::Paused, None);
+        assert!(state.has_url(&url), "a paused download is still in the queue");
+    }
+
+    #[test]
+    fn clear_history_removes_only_finished_entries() {
+        let state = app();
+        for i in 0..5 {
+            push(&state, &format!("c{i}"));
+        }
+        state.set_status("c0", Status::Completed, None);
+        state.set_status("c1", Status::Failed, None);
+        state.set_status("c2", Status::Paused, None);
+        state.set_status("c3", Status::Downloading, None);
+        // c4 stays Queued.
+
+        state.clear_history();
+        let left: Vec<String> = state.queue.lock().unwrap().iter().map(|d| d.id.clone()).collect();
+        assert_eq!(left, vec!["c2", "c3", "c4"]);
+    }
+
+    #[test]
+    fn pause_all_leaves_finished_entries_alone() {
+        let state = app();
+        for i in 0..4 {
+            push(&state, &format!("p{i}"));
+        }
+        state.set_status("p0", Status::Downloading, None);
+        state.set_status("p1", Status::Interrupted, None);
+        state.set_status("p2", Status::Completed, None);
+        state.set_status("p3", Status::Failed, None);
+
+        state.pause_all();
+        assert_eq!(status_of(&state, "p0"), Status::Paused);
+        assert_eq!(status_of(&state, "p1"), Status::Paused);
+        assert_eq!(status_of(&state, "p2"), Status::Completed);
+        assert_eq!(status_of(&state, "p3"), Status::Failed);
+    }
+
+    #[test]
+    fn views_report_what_the_row_shows() {
+        let state = app();
+        let dir = scratch("views");
+        state.queue.lock().unwrap().push(Download::new("v1".into(), plan_in(&dir, "movie.mkv")));
+        state.record_progress("v1", vec![400]);
+        state.set_status("v1", Status::Paused, None);
+
+        let views = state.views();
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].filename, "movie.mkv");
+        assert_eq!(views[0].downloaded, 400);
+        assert_eq!(views[0].total, Some(1000));
+        assert_eq!(views[0].status, Status::Paused);
+        assert_eq!(views[0].engine, "http");
+        assert!(!views[0].has_cookie, "a plain download carries no session");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn ids_never_repeat() {
+        let state = app();
+        let ids: std::collections::HashSet<String> = (0..500).map(|_| state.next_id()).collect();
+        assert_eq!(ids.len(), 500);
+    }
+
+    // -- the scheduler ------------------------------------------------------
+
+    /// The window closing is not a user decision, so suspended transfers go
+    /// back to Queued and restart by themselves. Marking them Paused would need
+    /// a manual Resume every morning.
+    #[test]
+    fn schedule_suspend_queues_rather_than_pauses() {
+        let state = app();
+        push(&state, "s1");
+        state.set_status("s1", Status::Downloading, None);
+
+        let progress = crate::download::Progress::resumed(&[512]);
+        let token = tokio_util::sync::CancellationToken::new();
+        state.active.lock().unwrap().insert(
+            "s1".into(),
+            Active { token: token.clone(), progress, gen: 1 },
+        );
+
+        state.suspend_for_schedule();
+
+        assert_eq!(status_of(&state, "s1"), Status::Queued, "must auto-resume, not wait for the user");
+        assert!(token.is_cancelled(), "the transfer task must actually be stopped");
+        assert!(state.active.lock().unwrap().is_empty());
+        assert_eq!(
+            state.queue.lock().unwrap()[0].downloaded(),
+            512,
+            "the partial's offsets must be persisted, not lost"
+        );
+    }
+
+    #[test]
+    fn schedule_suspend_on_an_idle_queue_does_nothing() {
+        let state = app();
+        push(&state, "s2");
+        state.suspend_for_schedule();
+        assert_eq!(status_of(&state, "s2"), Status::Queued);
+    }
+
+    // -- parked extension requests ------------------------------------------
+
+    #[test]
+    fn pending_tokens_are_unique_and_single_use() {
+        let state = app();
+        let mk = |url: &str| PendingAdd {
+            url: url.into(),
+            session: None,
+            force_video: false,
+            added_at: crate::queue::now_secs(),
+        };
+
+        let a = state.stash_pending(mk("https://example.com/a"));
+        let b = state.stash_pending(mk("https://example.com/b"));
+        assert_ne!(a, b);
+
+        assert_eq!(state.take_pending(&a).unwrap().url, "https://example.com/a");
+        assert!(state.take_pending(&a).is_none(), "a token must not be redeemable twice");
+        assert!(state.take_pending("never-issued").is_none());
+        assert!(state.take_pending(&b).is_some());
+    }
+
+    /// A dialog closed by shutting the window never answers. Without the sweep
+    /// the map would grow for the life of the process.
+    #[test]
+    fn pending_requests_expire() {
+        let state = app();
+        let now = crate::queue::now_secs();
+
+        let stale = state.stash_pending(PendingAdd {
+            url: "https://example.com/old".into(),
+            session: None,
+            force_video: false,
+            added_at: now - PENDING_TTL_SECS - 1,
+        });
+        let fresh = state.stash_pending(PendingAdd {
+            url: "https://example.com/new".into(),
+            session: None,
+            force_video: false,
+            added_at: now,
+        });
+
+        // The sweep runs on the next stash, so the stale entry is gone by now.
+        assert!(state.take_pending(&stale).is_none());
+        assert!(state.take_pending(&fresh).is_some());
+    }
+
+    // -- session precedence -------------------------------------------------
+
+    /// A session the extension captured wins over the cookies file: it carries
+    /// the live cookie that just cleared a challenge. The proxy is the one
+    /// thing the extension cannot know, so it is always taken from settings.
+    #[tokio::test]
+    async fn captured_session_wins_and_still_gets_the_proxy() {
+        let state = app();
+        let dir = scratch("session");
+        let jar = dir.join("cookies.txt");
+        std::fs::write(&jar, ".example.com\tTRUE\t/\tFALSE\t2000000000\tfromfile\tv\n").unwrap();
+
+        state.set_settings(Settings {
+            cookies_file: Some(jar.clone()),
+            proxy: "http://127.0.0.1:8080".into(),
+            ..Settings::default()
+        });
+
+        let captured = Session {
+            user_agent: "BrowserAgent/1.0".into(),
+            cookie: Some("cf_clearance=live".into()),
+            referer: Some("https://example.com/page".into()),
+            proxy: None,
+        };
+        let session = state.session_for("https://example.com/a.zip", Some(captured));
+        assert_eq!(session.cookie.as_deref(), Some("cf_clearance=live"), "the file must not win");
+        assert_eq!(session.user_agent, "BrowserAgent/1.0");
+        assert_eq!(session.proxy.as_deref(), Some("http://127.0.0.1:8080"));
+
+        // With nothing captured, the cookies file is matched against the URL.
+        let manual = state.session_for("https://example.com/a.zip", None);
+        assert_eq!(manual.cookie.as_deref(), Some("fromfile=v"));
+        assert_eq!(manual.proxy.as_deref(), Some("http://127.0.0.1:8080"));
+
+        // A URL the file has no cookies for gets none.
+        let other = state.session_for("https://elsewhere.test/a.zip", None);
+        assert!(other.cookie.is_none());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_empty_proxy_setting_means_direct() {
+        let state = app();
+        state.set_settings(Settings { proxy: String::new(), ..Settings::default() });
+        assert!(state.session_for("https://example.com/a", None).proxy.is_none());
+        assert!(
+            state
+                .session_for("https://example.com/a", Some(Session::default()))
+                .proxy
+                .is_none()
+        );
+    }
+
+    /// A cookies file that does not exist, or is unreadable, must leave the
+    /// download running without cookies rather than failing the add.
+    #[tokio::test]
+    async fn a_missing_cookies_file_is_not_fatal() {
+        let state = app();
+        state.set_settings(Settings {
+            cookies_file: Some("/nonexistent/cookies.txt".into()),
+            ..Settings::default()
+        });
+        let session = state.session_for("https://example.com/a.zip", None);
+        assert!(session.cookie.is_none());
+        assert_eq!(session.user_agent, crate::download::USER_AGENT);
+    }
+
+    // -- settings -----------------------------------------------------------
+
+    /// Settings arrive over IPC. An out-of-range concurrency would have `pump`
+    /// spawn that many transfers at once, and 0 would stall the queue entirely.
+    #[tokio::test]
+    async fn settings_are_clamped_not_trusted() {
+        let state = app();
+
+        state.set_settings(Settings { max_concurrent: 0, segments: 0, ..Settings::default() });
+        assert_eq!(state.settings().max_concurrent, 1);
+        assert_eq!(state.settings().segments, 1);
+
+        state.set_settings(Settings { max_concurrent: 9999, segments: 9999, ..Settings::default() });
+        assert_eq!(state.settings().max_concurrent, 16);
+        assert_eq!(state.settings().segments, crate::download::MAX_SEGMENTS);
+
+        // A value already in range is left alone.
+        state.set_settings(Settings { max_concurrent: 3, segments: 4, ..Settings::default() });
+        assert_eq!(state.settings().max_concurrent, 3);
+        assert_eq!(state.settings().segments, 4);
+    }
+
+    #[test]
+    fn dirty_flag_flushes_once_then_stays_quiet() {
+        let state = app();
+        push(&state, "f1");
+
+        // Nothing marked: no write is owed.
+        assert!(!state.dirty.load(Ordering::Relaxed));
+        state.mark_dirty();
+        assert!(state.dirty.load(Ordering::Relaxed));
+
+        state.flush_if_dirty();
+        assert!(!state.dirty.load(Ordering::Relaxed), "the flag is consumed by the flush");
+
+        // A second flush with nothing dirty must not write again — that is the
+        // whole point of the flag: N downloads cost one write per tick, not N.
+        state.flush_if_dirty();
+        assert!(!state.dirty.load(Ordering::Relaxed));
+    }
+
+    // -- deleting files -----------------------------------------------------
+
+    #[test]
+    fn artifacts_deletion_respects_partial_only() {
+        let dir = scratch("artifacts");
+        let plan = plan_in(&dir, "movie.mkv");
+        std::fs::write(&plan.final_path, b"done").unwrap();
+        std::fs::write(&plan.part_path, b"partial").unwrap();
+
+        // "Remove from list" on an unfinished download: the partial goes, the
+        // finished file (if any) stays.
+        delete_artifacts(&plan, true);
+        assert!(!plan.part_path.exists());
+        assert!(plan.final_path.exists());
+
+        // "Delete file" takes both.
+        std::fs::write(&plan.part_path, b"partial").unwrap();
+        delete_artifacts(&plan, false);
+        assert!(!plan.part_path.exists());
+        assert!(!plan.final_path.exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// yt-dlp leaves a spread of intermediates (`.f137.mp4`, `.f251.webm`,
+    /// `.part`, `.ytdl`), so they are swept by stem.
+    #[test]
+    fn ytdlp_artifacts_are_swept_by_stem() {
+        let dir = scratch("ytdlp-sweep");
+        let mut plan = plan_in(&dir, "Big Buck Bunny [abc123].mp4");
+        plan.engine = crate::download::Engine::YtDlp;
+
+        for name in [
+            "Big Buck Bunny [abc123].mp4",
+            "Big Buck Bunny [abc123].f137.mp4.part",
+            "Big Buck Bunny [abc123].f251.webm",
+            "Big Buck Bunny [abc123].mp4.ytdl",
+        ] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        // An unrelated download in the same folder must survive.
+        std::fs::write(dir.join("Someone Else.mp4"), b"x").unwrap();
+        std::fs::create_dir(dir.join("Big Buck Bunny [abc123] subdir")).unwrap();
+
+        delete_artifacts(&plan, true);
+
+        assert!(dir.join("Someone Else.mp4").exists(), "swept an unrelated file");
+        assert!(
+            dir.join("Big Buck Bunny [abc123] subdir").exists(),
+            "the sweep must not remove directories"
+        );
+        let left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("Big Buck Bunny") && !n.ends_with("subdir"))
+            .collect();
+        assert!(left.is_empty(), "intermediates left behind: {left:?}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A placeholder name like "vid" would match half the folder, so a short
+    /// stem deletes only the exact path.
+    #[test]
+    fn short_stems_do_not_sweep_the_folder() {
+        let dir = scratch("short-stem");
+        std::fs::write(dir.join("ab"), b"x").unwrap();
+        std::fs::write(dir.join("ab.f137.mp4"), b"x").unwrap();
+        std::fs::write(dir.join("abcdef.mp4"), b"x").unwrap();
+
+        cleanup_by_stem(&dir.join("ab"));
+
+        assert!(!dir.join("ab").exists(), "the exact path still goes");
+        assert!(dir.join("ab.f137.mp4").exists(), "a 2-char stem must not sweep");
+        assert!(dir.join("abcdef.mp4").exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// A bulk action must not act on entries the action makes no sense for: a
     /// finished download is neither paused nor re-queued by a mixed selection.
     #[test]
@@ -1468,27 +1914,60 @@ mod tests {
         }
     }
 
-        /// The add dialog's payload must deserialize exactly as the frontend sends
+    /// The add dialog's payload must deserialize exactly as the frontend sends
     /// it; a field-name mismatch here would silently drop the chosen folder.
     #[test]
     fn add_options_deserialize_from_dialog_payload() {
-        let full: AddOptions =
-            serde_json::from_str(r#"{"dir":"/tmp/x","quality":"1080","start":false}"#).unwrap();
+        let full: AddOptions = serde_json::from_str(
+            r#"{"dir":"/tmp/x","name":"report.pdf","quality":"1080","start":false}"#,
+        )
+        .unwrap();
         assert_eq!(full.dir.as_deref(), Some("/tmp/x"));
+        assert_eq!(full.name.as_deref(), Some("report.pdf"));
         assert_eq!(full.quality.as_deref(), Some("1080"));
         assert_eq!(full.start, Some(false));
 
         // "Use setting" sends nulls; everything falls back to the defaults.
         let nulls: AddOptions =
-            serde_json::from_str(r#"{"dir":null,"quality":null,"start":true}"#).unwrap();
-        assert!(nulls.dir.is_none() && nulls.quality.is_none());
+            serde_json::from_str(r#"{"dir":null,"name":null,"quality":null,"start":true}"#).unwrap();
+        assert!(nulls.dir.is_none() && nulls.name.is_none() && nulls.quality.is_none());
         assert_eq!(nulls.start, Some(true));
 
         // Omitted entirely (extension bridge path).
         let empty: AddOptions = serde_json::from_str("{}").unwrap();
-        assert!(empty.dir.is_none() && empty.quality.is_none() && empty.start.is_none());
+        assert!(empty.dir.is_none() && empty.name.is_none() && empty.quality.is_none());
+        assert!(empty.start.is_none());
         // Absent `start` must mean "start now".
         assert!(empty.start != Some(false));
+    }
+
+    /// The frontend sends the action as a snake_case string. A rename on
+    /// either side would turn every bulk button into a silent no-op.
+    #[test]
+    fn bulk_action_deserializes_from_the_ui_payload() {
+        for (wire, expect) in [
+            ("\"pause\"", BulkAction::Pause),
+            ("\"resume\"", BulkAction::Resume),
+            ("\"remove\"", BulkAction::Remove),
+            ("\"remove_with_file\"", BulkAction::RemoveWithFile),
+        ] {
+            let parsed: BulkAction = serde_json::from_str(wire).expect(wire);
+            assert_eq!(
+                std::mem::discriminant(&parsed),
+                std::mem::discriminant(&expect),
+                "{wire}"
+            );
+        }
+        assert!(serde_json::from_str::<BulkAction>("\"removeWithFile\"").is_err());
+        assert!(serde_json::from_str::<BulkAction>("\"delete\"").is_err());
+    }
+
+    #[test]
+    fn bulk_on_an_empty_selection_is_a_no_op() {
+        let state = app();
+        push(&state, "e1");
+        state.bulk(&[], BulkAction::RemoveWithFile);
+        assert_eq!(state.queue.lock().unwrap().len(), 1);
     }
 
     #[test]

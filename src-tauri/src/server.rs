@@ -129,16 +129,7 @@ fn handle_add(app: &AppHandle, state: &Arc<AppState>, body: &str) -> Result<Stri
     let req: AddRequest =
         serde_json::from_str(body).map_err(|e| format!("invalid request JSON: {e}"))?;
 
-    let session = Session {
-        user_agent: req
-            .user_agent
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| crate::download::USER_AGENT.to_string()),
-        cookie: req.cookie.filter(|s| !s.is_empty()),
-        referer: req.referer.filter(|s| !s.is_empty()),
-        // Filled in from settings by `session_for`.
-        proxy: None,
-    };
+    let session = session_from(&req);
 
     // Hand off to the same async path the UI uses. The bridge thread is
     // blocking, so bounce onto the Tokio runtime and wait for the result to
@@ -179,6 +170,26 @@ fn handle_add(app: &AppHandle, state: &Arc<AppState>, body: &str) -> Result<Stri
     rx.recv().map_err(|_| "internal error".to_string())?
 }
 
+/// Turn the extension's payload into a replayable session.
+///
+/// The extension sends empty strings for headers it could not read, and an
+/// empty `Cookie:` or `Referer:` header is worse than none — some hosts treat
+/// it as a malformed request — so blanks become `None`. A missing agent falls
+/// back to fetchd's default rather than sending none at all.
+fn session_from(req: &AddRequest) -> Session {
+    Session {
+        user_agent: req
+            .user_agent
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| crate::download::USER_AGENT.to_string()),
+        cookie: req.cookie.clone().filter(|s| !s.is_empty()),
+        referer: req.referer.clone().filter(|s| !s.is_empty()),
+        // Filled in from settings by `session_for`.
+        proxy: None,
+    }
+}
+
 fn is_loopback(request: &tiny_http::Request) -> bool {
     match request.remote_addr() {
         Some(addr) => match addr.ip() {
@@ -206,4 +217,91 @@ where
         .with_header(allow_origin)
         .with_header(allow_headers)
         .with_header(allow_methods)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(body: &str) -> AddRequest {
+        serde_json::from_str(body).expect("payload must parse")
+    }
+
+    /// The extension's minimal payload: a URL and nothing else. Every other
+    /// field has to default, or a plain right-click would be a 400.
+    #[test]
+    fn minimal_payload_defaults_everything() {
+        let req = parse(r#"{"url":"https://example.com/a.zip"}"#);
+        assert_eq!(req.url, "https://example.com/a.zip");
+        assert!(req.cookie.is_none());
+        assert!(req.user_agent.is_none());
+        assert!(req.referer.is_none());
+        assert!(!req.video, "a plain link is not forced through yt-dlp");
+        assert!(!req.ask, "queuing straight away is the default");
+    }
+
+    #[test]
+    fn full_payload_maps_every_field() {
+        let req = parse(
+            r#"{
+                "url": "https://example.com/v",
+                "cookie": "a=1; b=2",
+                "userAgent": "Mozilla/5.0 (X11)",
+                "referer": "https://example.com/page",
+                "video": true,
+                "ask": true
+            }"#,
+        );
+        assert_eq!(req.cookie.as_deref(), Some("a=1; b=2"));
+        // The JSON key is camelCase; the field is not.
+        assert_eq!(req.user_agent.as_deref(), Some("Mozilla/5.0 (X11)"));
+        assert_eq!(req.referer.as_deref(), Some("https://example.com/page"));
+        assert!(req.video);
+        assert!(req.ask);
+    }
+
+    /// A newer extension against an older app (or the reverse) must not break
+    /// on a key the other side does not know.
+    #[test]
+    fn unknown_fields_are_ignored() {
+        let req = parse(r#"{"url":"https://example.com/a","futureOption":42}"#);
+        assert_eq!(req.url, "https://example.com/a");
+    }
+
+    #[test]
+    fn a_payload_without_a_url_is_rejected() {
+        assert!(serde_json::from_str::<AddRequest>(r#"{"cookie":"a=1"}"#).is_err());
+        assert!(serde_json::from_str::<AddRequest>("not json").is_err());
+        assert!(serde_json::from_str::<AddRequest>(r#"{"url":42}"#).is_err());
+    }
+
+    /// The extension sends "" for a header it could not read. An empty
+    /// `Cookie:` or `Referer:` is worse than none, so blanks must not become
+    /// headers.
+    #[test]
+    fn empty_strings_become_no_header() {
+        let session = session_from(&parse(
+            r#"{"url":"https://e.test/a","cookie":"","userAgent":"","referer":""}"#,
+        ));
+        assert!(session.cookie.is_none());
+        assert!(session.referer.is_none());
+        assert_eq!(session.user_agent, crate::download::USER_AGENT);
+    }
+
+    #[test]
+    fn a_missing_agent_falls_back_to_the_default() {
+        let session = session_from(&parse(r#"{"url":"https://e.test/a"}"#));
+        assert_eq!(session.user_agent, crate::download::USER_AGENT);
+        // The proxy is never taken from the extension; `session_for` fills it
+        // in from settings.
+        assert!(session.proxy.is_none());
+    }
+
+    #[test]
+    fn a_supplied_agent_wins_over_the_default() {
+        let session = session_from(&parse(
+            r#"{"url":"https://e.test/a","userAgent":"CustomAgent/1.0"}"#,
+        ));
+        assert_eq!(session.user_agent, "CustomAgent/1.0");
+    }
 }

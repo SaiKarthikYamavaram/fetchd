@@ -1934,6 +1934,215 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    // -- plan_segments edges ------------------------------------------------
+
+    /// Every byte of the file must be covered exactly once, whatever the
+    /// remainder: a gap leaves a hole, an overlap corrupts.
+    #[test]
+    fn segments_tile_awkward_totals_without_gap_or_overlap() {
+        for total in [
+            MIN_SEGMENTED_SIZE,
+            MIN_SEGMENTED_SIZE + 1,
+            MIN_SEGMENTED_SIZE + 7,
+            10 * 1024 * 1024 + 3,
+            u32::MAX as u64 + 12345,
+        ] {
+            for segments in 1..=MAX_SEGMENTS {
+                let ranges = plan_segments(total, segments);
+                assert_eq!(ranges[0].0, 0, "total={total} n={segments} must start at 0");
+                assert_eq!(
+                    ranges.last().unwrap().1,
+                    total - 1,
+                    "total={total} n={segments} must end at the last byte"
+                );
+                for w in ranges.windows(2) {
+                    assert_eq!(w[1].0, w[0].1 + 1, "total={total} n={segments} has a gap or overlap");
+                }
+                let covered: u64 = ranges.iter().map(|(a, b)| b - a + 1).sum();
+                assert_eq!(covered, total, "total={total} n={segments} miscounts bytes");
+            }
+        }
+    }
+
+    #[test]
+    fn segments_handle_degenerate_inputs() {
+        // Nothing to fetch: no ranges at all, so `run` takes its empty-file path.
+        assert!(plan_segments(0, 8).is_empty());
+
+        // A one-byte file is a single inclusive [0, 0] range, not an empty one.
+        assert_eq!(plan_segments(1, 8), vec![(0, 0)]);
+
+        // 0 segments would divide by zero; it is clamped to 1.
+        assert_eq!(plan_segments(1024, 0), vec![(0, 1023)]);
+
+        // More segments than bytes would produce empty ranges.
+        let ranges = plan_segments(MIN_SEGMENTED_SIZE, MAX_SEGMENTS);
+        assert!(ranges.iter().all(|(a, b)| b >= a), "no empty ranges");
+    }
+
+    // -- URL validation -----------------------------------------------------
+
+    #[test]
+    fn url_validation_rejects_non_absolute_and_odd_schemes() {
+        assert!(validate_url("").is_err());
+        assert!(validate_url("example.com/file.zip").is_err(), "no scheme");
+        assert!(validate_url("/local/path").is_err());
+        assert!(validate_url("javascript:alert(1)").is_err());
+        assert!(validate_url("data:text/plain,hi").is_err());
+        // The scheme is case-insensitive per RFC 3986; the parser lowercases it.
+        assert!(validate_url("HTTPS://example.com/a.zip").is_ok());
+    }
+
+    // -- Progress -----------------------------------------------------------
+
+    #[test]
+    fn progress_resumes_from_persisted_offsets() {
+        let p = Progress::resumed(&[100, 250, 0]);
+        assert_eq!(p.total(), 350);
+        assert_eq!(p.snapshot(), vec![100, 250, 0], "resumed offsets are already durable");
+
+        // Fresh bytes count as live immediately but not as durable.
+        p.counter(2).add(50);
+        assert_eq!(p.total(), 400);
+        assert_eq!(p.snapshot(), vec![100, 250, 0]);
+
+        p.counter(2).commit();
+        assert_eq!(p.snapshot(), vec![100, 250, 50]);
+    }
+
+    #[test]
+    fn progress_always_has_at_least_one_counter() {
+        // `Progress::new(0)` would otherwise panic in `set_absolute`, which the
+        // yt-dlp path calls on a plan with no ranges.
+        let p = Progress::new(0);
+        p.set_absolute(4096);
+        assert_eq!(p.total(), 4096);
+        assert_eq!(p.snapshot().len(), 1);
+    }
+
+    #[test]
+    fn set_absolute_replaces_rather_than_accumulates() {
+        // yt-dlp reports a cumulative figure, so each tick overwrites; adding
+        // would double-count the whole download.
+        let p = Progress::new(1);
+        p.set_absolute(1000);
+        p.set_absolute(2500);
+        assert_eq!(p.total(), 2500);
+        // Absolute sets are durable at once: there is no separate fsync to wait
+        // for, yt-dlp owns the file.
+        assert_eq!(p.snapshot(), vec![2500]);
+
+        // A backwards report is honoured, not clamped — the caller (run_video)
+        // is what banks finished phases.
+        p.set_absolute(10);
+        assert_eq!(p.total(), 10);
+    }
+
+    #[test]
+    fn progress_reset_clears_every_counter() {
+        // Used when a server ignores Range and the whole file must restart.
+        let p = Progress::resumed(&[10, 20]);
+        p.counter(0).add(5);
+        p.reset();
+        assert_eq!(p.total(), 0);
+        assert_eq!(p.snapshot(), vec![0, 0]);
+    }
+
+    // -- Content-Disposition edges ------------------------------------------
+
+    #[test]
+    fn content_disposition_percent_escapes_and_bad_input() {
+        // RFC 5987 percent-decoding, including a space.
+        assert_eq!(
+            filename_from_content_disposition("attachment; filename*=UTF-8''my%20file%2Ezip")
+                .as_deref(),
+            Some("my file.zip")
+        );
+        // A truncated escape must not panic or eat the rest of the name.
+        assert!(
+            filename_from_content_disposition("attachment; filename*=UTF-8''bad%2")
+                .is_some_and(|n| !n.is_empty())
+        );
+        // Header present but no filename parameter at all.
+        assert_eq!(filename_from_content_disposition("inline"), None);
+        assert_eq!(filename_from_content_disposition(""), None);
+    }
+
+    #[test]
+    fn resolve_filename_never_returns_a_traversal() {
+        let url = Url::parse("https://example.com/dl").unwrap();
+        // A hostile Content-Disposition is sanitised, then still used.
+        assert_eq!(
+            resolve_filename(Some(r#"attachment; filename="../../etc/passwd""#), &url),
+            "passwd"
+        );
+        // A name that sanitises away entirely falls through to the URL path,
+        // and then to the default.
+        assert_eq!(resolve_filename(Some(r#"attachment; filename="..""#), &url), "dl");
+        let bare = Url::parse("https://example.com/").unwrap();
+        assert_eq!(resolve_filename(None, &bare), "download.bin");
+    }
+
+    #[test]
+    fn category_of_awkward_names() {
+        // The extension match is case-insensitive.
+        assert_eq!(category_for("CLIP.MP4"), "Video");
+        assert_eq!(category_for("Photo.JPEG"), "Images");
+        // No extension, and a dotfile whose only dot starts the name.
+        assert_eq!(category_for("README"), "Other");
+        assert_eq!(category_for(".bashrc"), "Other");
+        // Multi-dot names classify on the last extension.
+        assert_eq!(category_for("backup.tar.gz"), "Archives");
+    }
+
+    // -- clients ------------------------------------------------------------
+
+    /// A typo in the proxy box must not stop every download: an unusable proxy
+    /// is logged and skipped, and the client still builds.
+    #[test]
+    fn a_bad_proxy_does_not_break_client_construction() {
+        for proxy in [
+            Some("not a proxy".to_string()),
+            Some("://missing-scheme".to_string()),
+            Some(String::new()), // an empty box means direct, not a proxy of ""
+            None,
+        ] {
+            let session = Session { proxy, ..Session::default() };
+            assert!(build_client(&session).is_ok(), "client must still build");
+            assert!(build_segment_client(&session).is_ok());
+        }
+
+        // A usable proxy also builds (nothing connects until a request is made).
+        let session = Session {
+            proxy: Some("http://127.0.0.1:9".into()),
+            ..Session::default()
+        };
+        assert!(build_client(&session).is_ok());
+    }
+
+    #[test]
+    fn browser_headers_omit_blank_session_values() {
+        // A `Referer:` header with no value is worse than no header at all.
+        let bare = browser_headers(&Session::default());
+        assert!(!bare.contains_key(reqwest::header::REFERER));
+        assert!(!bare.contains_key(reqwest::header::COOKIE));
+
+        let full = browser_headers(&Session {
+            cookie: Some("a=1".into()),
+            referer: Some("https://example.com/".into()),
+            ..Session::default()
+        });
+        assert_eq!(full.get(reqwest::header::COOKIE).unwrap(), "a=1");
+        assert_eq!(full.get(reqwest::header::REFERER).unwrap(), "https://example.com/");
+
+        // A header value that cannot be encoded is skipped, not a panic.
+        let weird = browser_headers(&Session {
+            cookie: Some("bad\nvalue".into()),
+            ..Session::default()
+        });
+        assert!(!weird.contains_key(reqwest::header::COOKIE));
+    }
+
     /// Durable must never run ahead of live, because `queue.json` records
     /// durable and a resume trusts it absolutely.
     #[test]

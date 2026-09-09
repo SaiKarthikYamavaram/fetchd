@@ -239,6 +239,91 @@ malformed line without tabs
         assert!(path_matches("/", "/anything"));
     }
 
+    /// The expiry comparison is `<= now`, so a cookie expiring this very
+    /// second is already gone. Session cookies (`0`) never expire.
+    #[test]
+    fn expiry_boundary_and_session_cookies() {
+        let jar = [
+            Cookie {
+                domain: ".example.com".into(),
+                include_subdomains: true,
+                path: "/".into(),
+                secure: false,
+                expires: 1000,
+                name: "exact".into(),
+                value: "v".into(),
+            },
+            Cookie {
+                domain: ".example.com".into(),
+                include_subdomains: true,
+                path: "/".into(),
+                secure: false,
+                expires: 0,
+                name: "session".into(),
+                value: "v".into(),
+            },
+        ];
+
+        assert!(jar[0].matches("example.com", "/", false, 999), "one second early: still valid");
+        assert!(!jar[0].matches("example.com", "/", false, 1000), "expiring now counts as expired");
+        assert!(!jar[0].matches("example.com", "/", false, 1001));
+
+        // A session cookie has no expiry at all, even far in the future.
+        assert!(jar[1].matches("example.com", "/", false, u64::MAX));
+    }
+
+    #[test]
+    fn httponly_prefixed_lines_are_cookies_not_comments() {
+        let jar = parse(SAMPLE);
+        assert!(
+            jar.iter().any(|c| c.name == "session" && c.value == "keep"),
+            "the #HttpOnly_ prefix must be stripped, not treated as a comment"
+        );
+        // Everything else starting with # is still a comment.
+        assert!(!jar.iter().any(|c| c.name.starts_with('#')));
+    }
+
+    #[test]
+    fn malformed_lines_are_skipped_not_fatal() {
+        let jar = parse(
+            "\
+too\tfew\tfields
+.a.com\tTRUE\t/\tFALSE\tnot-a-number\tname\tvalue
+.b.com\tTRUE\t/\tFALSE\t2000000000\t\tvalue
+.good.com\tTRUE\t/\tFALSE\t2000000000\tkeeper\tyes
+",
+        );
+        assert_eq!(jar.len(), 1, "only the well-formed line survives");
+        assert_eq!(jar[0].name, "keeper");
+    }
+
+    #[test]
+    fn negative_expiry_clamps_to_zero_not_a_huge_number() {
+        // `expires as u64` on a negative float wraps to an enormous value,
+        // which would make an expired cookie immortal.
+        let jar = parse(".a.com\tTRUE\t/\tFALSE\t-5\tstale\tv\n");
+        assert_eq!(jar[0].expires, 0);
+    }
+
+    #[test]
+    fn host_matching_ignores_case() {
+        let jar = parse(".Example.COM\tTRUE\t/\tFALSE\t2000000000\tk\tv\n");
+        let url = Url::parse("http://WWW.example.com/a").unwrap();
+        assert_eq!(header_for(&jar, &url).as_deref(), Some("k=v"));
+    }
+
+    #[test]
+    fn header_joins_every_match_in_file_order() {
+        let jar = parse(
+            "\
+.example.com\tTRUE\t/\tFALSE\t2000000000\tone\t1
+.example.com\tTRUE\t/\tFALSE\t2000000000\ttwo\t2
+",
+        );
+        let url = Url::parse("http://example.com/x").unwrap();
+        assert_eq!(header_for(&jar, &url).as_deref(), Some("one=1; two=2"));
+    }
+
     #[test]
     fn subdomain_rules() {
         assert!(domain_matches(".example.com", true, "example.com"));

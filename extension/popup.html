@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        width: 250px;
+        margin: 0;
+        padding: 12px 14px;
+        font: 13px system-ui, sans-serif;
+        color: #1a1a1a;
+        background: #fff;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { color: #eee; background: #232323; }
+      }
+      h1 { margin: 0 0 8px; font-size: 14px; }
+      .status { margin-bottom: 10px; font-size: 12px; }
+      .up { color: #15803d; }
+      .down { color: #b91c1c; }
+      label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+      .hint { margin: 6px 0 0 24px; font-size: 11px; opacity: 0.7; line-height: 1.4; }
+    </style>
+  </head>
+  <body>
+    <h1>fetchd</h1>
+    <div class="status" id="status">Checking…</div>
+    <label>
+      <input type="checkbox" id="intercept" />
+      <span>Capture every browser download</span>
+    </label>
+    <p class="hint">
+      When on, downloads you start in the browser are handed to fetchd instead,
+      with this browser's cookies. Right-click any link to send just that one.
+    </p>
+    <script src="popup.js"></script>
+  </body>
+</html>

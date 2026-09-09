@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "fetchd integration",
+  "version": "1.0.0",
+  "description": "Send downloads to the fetchd download manager, carrying the browser's own cookies so authenticated and challenge-protected files still work.",
+  "permissions": [
+    "cookies",
+    "contextMenus",
+    "downloads",
+    "notifications",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:47831/",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "fetchd",
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

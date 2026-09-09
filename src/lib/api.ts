@@ -1,0 +1,94 @@
+import { invoke } from "@tauri-apps/api/core";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+
+export type Status =
+  | "queued"
+  | "downloading"
+  | "paused"
+  | "interrupted"
+  | "completed"
+  | "failed";
+
+export type DownloadView = {
+  id: string;
+  url: string;
+  filename: string;
+  status: Status;
+  downloaded: number;
+  total: number | null;
+  segments: number;
+  error: string | null;
+  path: string;
+  added_at: number;
+  ranges: [number, number][];
+  done: number[];
+  supports_ranges: boolean;
+  user_agent: string | null;
+  referer: string | null;
+  has_cookie: boolean;
+};
+
+export type Settings = {
+  download_dir: string | null;
+  max_concurrent: number;
+  segments: number;
+  theme: string;
+  cookies_file: string | null;
+  user_agent: string | null;
+};
+
+export type ProgressRow = {
+  id: string;
+  downloaded: number;
+  total: number | null;
+};
+
+export const api = {
+  addDownload: (url: string) => invoke<string>("add_download", { url }),
+  importUrls: (text: string) => invoke<string[]>("import_urls", { text }),
+  isDuplicate: (url: string) => invoke<boolean>("is_duplicate", { url }),
+  pause: (id: string) => invoke<void>("pause_download", { id }),
+  resume: (id: string) => invoke<void>("resume_download", { id }),
+  cancel: (id: string) => invoke<void>("cancel_download", { id }),
+  retry: (id: string) => invoke<void>("retry_download", { id }),
+  remove: (id: string, deleteFile: boolean) =>
+    invoke<void>("remove_download", { id, deleteFile }),
+  pauseAll: () => invoke<void>("pause_all"),
+  getQueue: () => invoke<DownloadView[]>("get_queue"),
+  clearHistory: () => invoke<void>("clear_history"),
+  getSettings: () => invoke<Settings>("get_settings"),
+  updateSettings: (settings: Settings) =>
+    invoke<void>("update_settings", { settings }),
+
+  // Open the finished file with the OS default app.
+  openFile: (path: string) => openPath(path),
+  // Open the containing folder with the file selected, like IDM's
+  // "Open containing folder".
+  revealFile: (path: string) => revealItemInDir(path),
+};
+
+export function formatBytes(n: number): string {
+  // Never show raw bytes: the smallest unit is KB. One decimal below 10 (9.5
+  // MB), whole numbers above (512 KB, 100 MB).
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = n / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const dec = value === 0 ? 0 : value < 10 ? 1 : 0;
+  return `${value.toFixed(dec)} ${units[unit]}`;
+}
+
+export function formatDate(unixSecs: number): string {
+  if (!unixSecs) return "—";
+  return new Date(unixSecs * 1000).toLocaleString();
+}
+
+export function formatEta(seconds: number): string {
+  if (!isFinite(seconds) || seconds <= 0) return "";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}

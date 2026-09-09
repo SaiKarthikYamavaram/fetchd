@@ -49,6 +49,12 @@ function App() {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [renameId, setRenameId] = useState<string | null>(null);
+  // Multi-select. Kept as ids rather than rows so it survives queue snapshots.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Anchor for shift-click range selection, in the order the list is showing.
+  const anchor = useRef<string | null>(null);
+  // Set when the delete dialog is confirming the whole selection.
+  const [deletingSelection, setDeletingSelection] = useState(false);
   // URL awaiting confirmation in the add dialog (location, quality, start).
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
   // Set when the extension parked the request; confirming replays its session.
@@ -153,6 +159,17 @@ function App() {
     }
   }
 
+  // Drop ids that have left the queue, so a stale selection cannot act on
+  // entries that no longer exist or keep the selection bar open over nothing.
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const live = new Set(rows.map((r) => r.id));
+      const next = new Set([...prev].filter((id) => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [rows]);
+
   const active = rows.filter((r) => r.status !== "completed" && r.status !== "failed");
   const done = rows.filter((r) => r.status === "completed" || r.status === "failed");
   const downloading = active.filter((r) => r.status === "downloading");
@@ -169,6 +186,45 @@ function App() {
   const detailRow = detailId ? rows.find((r) => r.id === detailId) ?? null : null;
   const deleteRow = deleteId ? rows.find((r) => r.id === deleteId) ?? null : null;
   const renameRow = renameId ? rows.find((r) => r.id === renameId) ?? null : null;
+
+  const selectedRows = visible.filter((r) => selected.has(r.id));
+  const selectedIds = selectedRows.map((r) => r.id);
+  const allVisibleSelected = visible.length > 0 && selectedRows.length === visible.length;
+  const canPause = selectedRows.some((r) => r.status === "downloading" || r.status === "queued");
+  const canResume = selectedRows.some(
+    (r) => r.status === "paused" || r.status === "interrupted" || r.status === "failed",
+  );
+
+  /// Toggle one row. Shift extends from the last plain click, over the list as
+  /// it is currently filtered and ordered.
+  function toggleRow(id: string, extend: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const from = anchor.current ? visible.findIndex((r) => r.id === anchor.current) : -1;
+      const to = visible.findIndex((r) => r.id === id);
+      if (extend && from >= 0 && to >= 0) {
+        const [lo, hi] = from < to ? [from, to] : [to, from];
+        // A range always selects; shift never clears, which is what every file
+        // list does and what makes repeated range picks predictable.
+        for (let i = lo; i <= hi; i++) next.add(visible[i].id);
+      } else {
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        anchor.current = id;
+      }
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelected(allVisibleSelected ? new Set() : new Set(visible.map((r) => r.id)));
+    anchor.current = null;
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+    anchor.current = null;
+  }
 
   return (
     <div className="app">
@@ -225,6 +281,19 @@ function App() {
         {error && <div className="toast err">{error}</div>}
 
         <div className="filters">
+          <label className="select-all" title={allVisibleSelected ? "Deselect all" : "Select all"}>
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              // Some but not all: the tri-state box only exists as a DOM
+              // property, so it has to be set through a ref callback.
+              ref={(el) => {
+                if (el) el.indeterminate = selectedRows.length > 0 && !allVisibleSelected;
+              }}
+              onChange={toggleAll}
+              disabled={visible.length === 0}
+            />
+          </label>
           <FilterPill label="All" count={rows.length} on={filter === "all"} onClick={() => setFilter("all")} />
           <FilterPill label="Active" count={active.length} on={filter === "active"} onClick={() => setFilter("active")} />
           <FilterPill label="Done" count={done.length} on={filter === "done"} onClick={() => setFilter("done")} />
@@ -232,6 +301,22 @@ function App() {
             <button className="clear" onClick={() => api.clearHistory()}>Clear finished</button>
           )}
         </div>
+
+        {selectedRows.length > 0 && (
+          <div className="selbar">
+            <span className="selcount">{selectedRows.length} selected</span>
+            <button className="btn" onClick={() => api.bulk(selectedIds, "pause")} disabled={!canPause}>
+              <IconPause /> Pause
+            </button>
+            <button className="btn" onClick={() => api.bulk(selectedIds, "resume")} disabled={!canResume}>
+              <IconPlay /> Resume
+            </button>
+            <button className="btn danger" onClick={() => setDeletingSelection(true)}>
+              <IconTrash /> Remove
+            </button>
+            <button className="clear" onClick={clearSelection}>Clear</button>
+          </div>
+        )}
 
         <div className="list">
           {visible.map((row) => (
@@ -244,6 +329,8 @@ function App() {
               onOpen={() => setDetailId(row.id)}
               onDelete={() => setDeleteId(row.id)}
               onRename={() => setRenameId(row.id)}
+              selected={selected.has(row.id)}
+              onSelect={(extend) => toggleRow(row.id, extend)}
             />
           ))}
           {visible.length === 0 && (
@@ -269,7 +356,16 @@ function App() {
         />
       )}
       {deleteRow && (
-        <ConfirmDelete row={deleteRow} onClose={() => setDeleteId(null)} />
+        <ConfirmDelete rows={[deleteRow]} onClose={() => setDeleteId(null)} />
+      )}
+      {deletingSelection && selectedRows.length > 0 && (
+        <ConfirmDelete
+          rows={selectedRows}
+          onClose={() => {
+            setDeletingSelection(false);
+            clearSelection();
+          }}
+        />
       )}
       {renameRow && (
         <RenameDialog row={renameRow} onClose={() => setRenameId(null)} />
@@ -303,7 +399,7 @@ function FilterPill({
 }
 
 function Row({
-  row, liveBytes, liveTotal, speed, onOpen, onDelete, onRename,
+  row, liveBytes, liveTotal, speed, onOpen, onDelete, onRename, selected, onSelect,
 }: {
   row: DownloadView;
   liveBytes?: number;
@@ -312,6 +408,8 @@ function Row({
   onOpen: () => void;
   onDelete: () => void;
   onRename: () => void;
+  selected: boolean;
+  onSelect: (extend: boolean) => void;
 }) {
   const downloaded = row.status === "downloading" && liveBytes !== undefined ? liveBytes : row.downloaded;
   // yt-dlp size is only known once running, so fall back to the live total.
@@ -327,7 +425,17 @@ function Row({
   const kind = fileKind(row.filename);
 
   return (
-    <div className={`row ${row.status}`}>
+    <div className={`row ${row.status}${selected ? " selected" : ""}`}>
+      <label className="row-check" title="Select">
+        <input
+          type="checkbox"
+          checked={selected}
+          // Shift extends the range from the last plain click, so the handler
+          // needs the modifier — `onChange` does not carry it.
+          onChange={() => {}}
+          onClick={(e) => onSelect(e.shiftKey)}
+        />
+      </label>
       {row.thumbnail ? (
         // Video preview thumbnail; overlay a small ring while downloading.
         <span className="thumb">

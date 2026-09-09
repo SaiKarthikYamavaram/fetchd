@@ -154,6 +154,13 @@ fn rename_download(app: AppHandle, state: Shared<'_>, id: String, name: String) 
 }
 
 #[tauri::command]
+fn bulk_action(app: AppHandle, state: Shared<'_>, ids: Vec<String>, action: state::BulkAction) {
+    state.bulk(&ids, action);
+    // `pump` starts anything the removals freed a slot for, and emits.
+    state::pump(&app, &state);
+}
+
+#[tauri::command]
 fn pause_all(app: AppHandle, state: Shared<'_>) {
     state.pause_all();
     state::emit_queue(&app, &state);
@@ -309,6 +316,7 @@ pub fn run() {
             retry_download,
             remove_download,
             rename_download,
+            bulk_action,
             pause_all,
             get_queue,
             clear_history,

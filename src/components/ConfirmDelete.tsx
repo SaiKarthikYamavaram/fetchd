@@ -6,23 +6,30 @@ import { useEscape } from "../lib/useEscape";
 /// list" keeps the downloaded file; "Delete file too" erases it from disk.
 /// For an unfinished download the file on disk is only a partial, so the
 /// wording adapts.
+///
+/// Takes a list so a multi-row selection asks the same question once, rather
+/// than needing a second near-identical dialog.
 export function ConfirmDelete({
-  row,
+  rows,
   onClose,
 }: {
-  row: DownloadView;
+  rows: DownloadView[];
   onClose: () => void;
 }) {
   useEscape(onClose);
 
-  const finished = row.status === "completed";
+  const many = rows.length > 1;
+  // With a mixed selection the cautious wording wins: say "partial" unless
+  // every entry is finished.
+  const finished = rows.every((r) => r.status === "completed");
+  const ids = rows.map((r) => r.id);
 
   function removeOnly() {
-    api.remove(row.id, false);
+    api.bulk(ids, "remove");
     onClose();
   }
   function deleteFile() {
-    api.remove(row.id, true);
+    api.bulk(ids, "remove_with_file");
     onClose();
   }
 
@@ -30,17 +37,23 @@ export function ConfirmDelete({
     <div className="overlay" onClick={onClose}>
       <div className="modal confirm" onClick={(e) => e.stopPropagation()}>
         <div className="confirm-icon"><IconTrash size={22} /></div>
-        <h2 className="confirm-title">Remove “{row.filename}”?</h2>
+        <h2 className="confirm-title">
+          {many ? `Remove ${rows.length} downloads?` : `Remove “${rows[0].filename}”?`}
+        </h2>
         <p className="confirm-sub">
           {finished
-            ? "Keep the downloaded file, or delete it from disk as well."
-            : "This cancels the download. The partial file can be kept or deleted."}
+            ? many
+              ? "Keep the downloaded files, or delete them from disk as well."
+              : "Keep the downloaded file, or delete it from disk as well."
+            : many
+              ? "This cancels any that are unfinished. Their partial files can be kept or deleted."
+              : "This cancels the download. The partial file can be kept or deleted."}
         </p>
         <div className="confirm-actions">
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn" onClick={removeOnly}>Remove from list</button>
           <button className="btn danger" onClick={deleteFile}>
-            <IconTrash size={15} /> Delete file
+            <IconTrash size={15} /> {many ? "Delete files" : "Delete file"}
           </button>
         </div>
       </div>

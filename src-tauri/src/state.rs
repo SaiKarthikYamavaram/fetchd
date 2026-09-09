@@ -111,6 +111,18 @@ pub struct AddOptions {
     pub start: Option<bool>,
 }
 
+/// What a multi-row selection asks for. Sending the whole selection as one
+/// command keeps it to a single round trip and a single queue emit, rather than
+/// one of each per row.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BulkAction {
+    Pause,
+    Resume,
+    Remove,
+    RemoveWithFile,
+}
+
 /// A download the extension captured but the user has not confirmed yet.
 /// Held here so the browser session (cookies/UA/referer) survives until the
 /// add dialog is answered.
@@ -568,6 +580,35 @@ impl AppState {
         self.queue.lock().unwrap().push(entry);
         self.save_queue();
         Ok(id)
+    }
+
+    /// Apply one action to a selection of entries.
+    ///
+    /// `pause` and `resume` set the status unconditionally, so a mixed
+    /// selection is filtered here — otherwise "Pause" would mark a finished
+    /// download Paused, and "Resume" would queue it for a second download.
+    pub fn bulk(&self, ids: &[String], action: BulkAction) {
+        let status: HashMap<String, Status> = {
+            let queue = self.queue.lock().unwrap();
+            queue.iter().map(|d| (d.id.clone(), d.status)).collect()
+        };
+
+        for id in ids {
+            let Some(st) = status.get(id).copied() else { continue };
+            match action {
+                BulkAction::Pause if matches!(st, Status::Downloading | Status::Queued) => {
+                    self.pause(id)
+                }
+                BulkAction::Resume
+                    if matches!(st, Status::Paused | Status::Interrupted | Status::Failed) =>
+                {
+                    self.resume(id)
+                }
+                BulkAction::Remove => self.remove(id, false),
+                BulkAction::RemoveWithFile => self.remove(id, true),
+                _ => {}
+            }
+        }
     }
 
     /// Rename an entry's file. The extension is kept when the new name omits
@@ -1222,6 +1263,38 @@ mod tests {
 
     fn status_of(state: &AppState, id: &str) -> Status {
         state.queue.lock().unwrap().iter().find(|d| d.id == id).unwrap().status
+    }
+
+    /// A bulk action must not act on entries the action makes no sense for: a
+    /// finished download is neither paused nor re-queued by a mixed selection.
+    #[test]
+    fn bulk_skips_entries_the_action_does_not_apply_to() {
+        let state = app();
+        for i in 0..4 {
+            push(&state, &format!("b{i}"));
+        }
+        state.set_status("b0", Status::Downloading, None);
+        state.set_status("b1", Status::Completed, None);
+        state.set_status("b2", Status::Paused, None);
+        state.set_status("b3", Status::Failed, None);
+
+        let all: Vec<String> = (0..4).map(|i| format!("b{i}")).collect();
+
+        state.bulk(&all, BulkAction::Pause);
+        assert_eq!(status_of(&state, "b0"), Status::Paused, "a running entry pauses");
+        assert_eq!(status_of(&state, "b1"), Status::Completed, "a finished entry must not pause");
+        assert_eq!(status_of(&state, "b3"), Status::Failed, "a failed entry must not pause");
+
+        state.bulk(&all, BulkAction::Resume);
+        assert_eq!(status_of(&state, "b0"), Status::Queued, "a paused entry resumes");
+        assert_eq!(status_of(&state, "b2"), Status::Queued);
+        assert_eq!(status_of(&state, "b3"), Status::Queued, "a failed entry retries");
+        assert_eq!(status_of(&state, "b1"), Status::Completed, "a finished entry must not re-queue");
+
+        // An id that has already left the queue is skipped, not a panic.
+        state.bulk(&["gone".to_string(), "b2".to_string()], BulkAction::Remove);
+        let left: Vec<String> = state.queue.lock().unwrap().iter().map(|d| d.id.clone()).collect();
+        assert_eq!(left, vec!["b0", "b1", "b3"]);
     }
 
     /// Renaming moves the real file, keeps the extension when none is typed,

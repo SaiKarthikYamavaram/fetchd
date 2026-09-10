@@ -234,6 +234,28 @@ describe("getSettings", () => {
     expect(s.types.image).toBe(false);
   });
 
+  it("falls back to the defaults when storage throws", async () => {
+    // A rejection here used to reach a top-level caller with no handler, which
+    // Chrome reports against the file itself with no usable line number.
+    const e = load({
+      chrome: {
+        storage: {
+          local: {
+            get: async () => {
+              throw new Error("storage unavailable");
+            },
+            set: async () => {},
+          },
+        },
+        cookies: { getAll: async () => [] },
+      },
+    });
+    const s = await e.getSettings();
+    expect(s.enabled).toBe(true);
+    expect(s.minSizeKb).toBe(512);
+    expect(s.types.video).toBe(true);
+  });
+
   it("merges the type map instead of replacing it", async () => {
     // A settings blob written before `image` existed must not lose the other
     // types, and must not turn every unknown type off.

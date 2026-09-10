@@ -238,9 +238,28 @@ async function grabFromPage(tab, mode, referer) {
 //
 // The interception below cannot afford an `await` before it cancels, and
 // reading storage is one. Kept fresh from the change event.
+//
+// Every call is caught: this runs at top level, where a rejected promise has
+// no caller to receive it and surfaces as an unhandled error against the file
+// itself. `chrome.storage` can genuinely reject — during shutdown, or if the
+// profile's storage is unavailable — and losing the cache is not a reason to
+// log an error the user cannot act on.
 let cachedSettings = null;
-const refreshSettings = () => getSettings().then((s) => (cachedSettings = s));
+
+function refreshSettings() {
+  return getSettings().then(
+    (s) => (cachedSettings = s),
+    () => cachedSettings, // keep whatever was last known good
+  );
+}
+
 refreshSettings();
+
+// Prime the cache when the worker starts cold, so the first download of a
+// session is decided synchronously like every other one.
+chrome.runtime.onStartup?.addListener(refreshSettings);
+chrome.runtime.onInstalled?.addListener(refreshSettings);
+
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.settings) refreshSettings();
 });
@@ -250,8 +269,9 @@ chrome.downloads.onCreated.addListener((item) => {
     if (shouldTakeOver(item, cachedSettings)) takeOver(item);
     return;
   }
-  // Cold service worker: read storage, and accept that this one download may
-  // lose the race. Every later one is decided synchronously.
+  // Cold worker with nothing primed yet: read storage, and accept that this
+  // one download may lose the race. Every later one is decided in the same
+  // tick the event arrives.
   refreshSettings().then((s) => {
     if (shouldTakeOver(item, s)) takeOver(item);
   });

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "fetchd integration",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Send downloads to fetchd with the browser's cookies. Detects media on a page, grabs all links or images, and routes captured downloads by file type.",
   "permissions": [
     "cookies",

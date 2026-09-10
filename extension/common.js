@@ -22,8 +22,17 @@ const DEFAULTS = {
 };
 
 async function getSettings() {
-  const stored = await chrome.storage.local.get("settings");
-  return { ...DEFAULTS, ...(stored.settings || {}), types: { ...DEFAULTS.types, ...((stored.settings || {}).types || {}) } };
+  // Storage can fail — during shutdown, or on a profile whose storage is
+  // unavailable. The defaults are a usable answer, so return them rather than
+  // making every caller handle a rejection.
+  let stored = {};
+  try {
+    stored = await chrome.storage.local.get("settings");
+  } catch {
+    /* fall through to the defaults */
+  }
+  const saved = stored.settings || {};
+  return { ...DEFAULTS, ...saved, types: { ...DEFAULTS.types, ...(saved.types || {}) } };
 }
 
 async function setSettings(patch) {

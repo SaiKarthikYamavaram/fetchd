@@ -1178,6 +1178,28 @@ label { cursor: pointer; }
 }
 /* The parked URL is data, not an editable field: recessed, monospaced, and
    clearly not for typing in. */
+/* The URL list. Monospaced because it holds URLs, and fixed-height because a
+   box that grows as you paste would push the dialog's buttons off screen. */
+.field textarea.urls {
+  width: 100%;
+  padding: 10px 13px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--fg);
+  background: var(--field);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+.field textarea.urls::placeholder { color: var(--faint); }
+.field textarea.urls:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
 /* A dialog is a fixed-height surface, so it runs tighter than the settings
    card: the same fields, less air between them. */
 .modal .field { margin-bottom: 12px; }

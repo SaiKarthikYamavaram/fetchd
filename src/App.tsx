@@ -65,6 +65,8 @@ function App() {
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
   // Set when the extension parked the request; confirming replays its session.
   const [pendingToken, setPendingToken] = useState<string | null>(null);
+  // Import opens the same dialog with its URL field as a list.
+  const [pendingMulti, setPendingMulti] = useState(false);
 
   // Live bytes arrive far more often than the queue snapshot, so they are kept
   // out of React state and merged at render time.
@@ -143,17 +145,6 @@ function App() {
       if (frame.current !== null) cancelAnimationFrame(frame.current);
     };
   }, [refresh, scheduleRender]);
-
-  async function importText() {
-    const text = prompt("Paste one URL per line:");
-    if (!text) return;
-    try {
-      const skipped = await api.importUrls(text);
-      setNotice(skipped.length ? `Imported. Skipped ${skipped.length}.` : "Imported.");
-    } catch (e) {
-      setError(String(e));
-    }
-  }
 
   // Drop ids that have left the queue, so a stale selection cannot act on
   // entries that no longer exist or keep the selection bar open over nothing.
@@ -355,12 +346,20 @@ function App() {
           </label>
           {/* Both ways of bringing a download in, side by side and spelled
               out. The toolbar keeps only what acts on the whole queue. */}
-          <button className="import-btn" type="button" onClick={importText}>
+          <button
+            className="import-btn"
+            type="button"
+            onClick={() => { setPendingMulti(true); setPendingUrl(""); }}
+          >
             <IconImport size={15} /> Import
           </button>
           {/* A plus, not another arrow: Import brings a file in, Add makes a
               new entry, and the brand already owns the download glyph. */}
-          <button className="add-btn" type="button" onClick={() => setPendingUrl("")}>
+          <button
+            className="add-btn"
+            type="button"
+            onClick={() => { setPendingMulti(false); setPendingUrl(""); }}
+          >
             <IconPlus size={16} /> Add
           </button>
         </div>
@@ -486,10 +485,12 @@ function App() {
       {pendingUrl !== null && (
         <AddDialog
           url={pendingUrl}
+          multi={pendingMulti}
           token={pendingToken}
           onClose={() => {
             setPendingUrl(null);
             setPendingToken(null);
+            setPendingMulti(false);
           }}
           onAdded={(msg) => {
             if (msg) setNotice(msg);

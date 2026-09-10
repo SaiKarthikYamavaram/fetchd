@@ -48,6 +48,7 @@ function splitUrls(text: string): string[] {
 export function AddDialog({
   url,
   token,
+  multi = false,
   onClose,
   onAdded,
 }: {
@@ -55,6 +56,9 @@ export function AddDialog({
   /// Set when the extension parked this request; confirming adds it with the
   /// browser session captured at capture time.
   token?: string | null;
+  /// Opened from Import: the URL field starts as a list, and stays one even
+  /// after the text is cleared.
+  multi?: boolean;
   onClose: () => void;
   onAdded: (msg: string | null) => void;
 }) {
@@ -71,6 +75,9 @@ export function AddDialog({
 
   const links = splitUrls(value);
   const batch = links.length > 1;
+  // A list stays a list: shrinking the box back to one line the moment the
+  // second URL is deleted is not helpful while editing.
+  const asList = multi || batch;
   const one = links[0] ?? "";
   const video = isVideoUrl(one);
 
@@ -153,22 +160,37 @@ export function AddDialog({
     <div className="overlay" onClick={dismiss}>
       <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <div className="modal-head">
-          <h2 className="modal-title">Add download</h2>
+          <h2 className="modal-title">{multi ? "Import links" : "Add download"}</h2>
           <button type="button" className="act" onClick={dismiss} title="Close">
             <IconX />
           </button>
         </div>
 
         <label className="field">
-          <span>{batch ? `${links.length} links` : "URL"}</span>
-          <input
-            value={value}
-            onChange={(e) => setValue(e.currentTarget.value)}
-            readOnly={locked}
-            placeholder="https://…  — or paste several at once"
-            spellCheck={false}
-            autoFocus={!locked}
-          />
+          <span>
+            {links.length > 1 ? `${links.length} links` : multi ? "Links" : "URL"}
+          </span>
+          {asList ? (
+            <textarea
+              className="urls"
+              value={value}
+              onChange={(e) => setValue(e.currentTarget.value)}
+              readOnly={locked}
+              placeholder={"https://example.com/one.zip\nhttps://example.com/two.zip\n\n# lines starting with # are skipped"}
+              spellCheck={false}
+              rows={5}
+              autoFocus={!locked}
+            />
+          ) : (
+            <input
+              value={value}
+              onChange={(e) => setValue(e.currentTarget.value)}
+              readOnly={locked}
+              placeholder="https://…  — or paste several at once"
+              spellCheck={false}
+              autoFocus={!locked}
+            />
+          )}
         </label>
 
         <label className="field">
@@ -189,21 +211,21 @@ export function AddDialog({
         <label className="field">
           <span>Save as</span>
           <input
-            value={batch ? "" : name}
+            value={asList ? "" : name}
             onChange={(e) => setName(e.currentTarget.value)}
             // A video URL's last path segment is routing ("watch", "video"),
             // never a filename — yt-dlp names it from the title instead.
             placeholder={
-              batch
+              asList
                 ? "One name cannot cover several links"
                 : (video ? "" : suggestedName(one)) || "Automatic"
             }
             spellCheck={false}
-            disabled={batch}
+            disabled={asList}
           />
         </label>
         <p className="help">
-          {batch
+          {asList
             ? "Every link goes to the folder above and keeps the name its server gives it."
             : video
               ? "Leave blank to use the video's title. The container is picked by yt-dlp."
@@ -240,9 +262,11 @@ export function AddDialog({
               ? "Adding…"
               : batch
                 ? `Download ${links.length}`
-                : start
-                  ? "Download"
-                  : "Add paused"}
+                : multi
+                  ? "Import"
+                  : start
+                    ? "Download"
+                    : "Add paused"}
           </button>
           <button type="button" className="btn" onClick={dismiss}>Cancel</button>
         </div>

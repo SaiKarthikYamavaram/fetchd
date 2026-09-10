@@ -81,6 +81,30 @@ export const IconDoc = ({ size = 18 }: P) => (
 export const IconDisc = ({ size = 18 }: P) => (
   <svg {...base(size)}><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="2" /></svg>
 );
+export const IconCode = ({ size = 18 }: P) => (
+  <svg {...base(size)}><path d="m16 18 6-6-6-6" /><path d="m8 6-6 6 6 6" /></svg>
+);
+export const IconSheet = ({ size = 18 }: P) => (
+  <svg {...base(size)}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M3 15h18M9 3v18" /></svg>
+);
+export const IconSlides = ({ size = 18 }: P) => (
+  <svg {...base(size)}><rect x="2" y="3" width="20" height="13" rx="2" /><path d="M8 21h8M12 16v5" /></svg>
+);
+export const IconBook = ({ size = 18 }: P) => (
+  <svg {...base(size)}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" /></svg>
+);
+export const IconFont = ({ size = 18 }: P) => (
+  <svg {...base(size)}><path d="M4 20h6M7 20V5m0 0h9a3.5 3.5 0 0 1 0 7H7" /></svg>
+);
+export const IconSubs = ({ size = 18 }: P) => (
+  <svg {...base(size)}><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M6 12h4M14 12h4M6 16h8" /></svg>
+);
+export const IconPackage = ({ size = 18 }: P) => (
+  <svg {...base(size)}><path d="m12 2 9 5v10l-9 5-9-5V7Z" /><path d="m3 7 9 5 9-5M12 12v10" /></svg>
+);
+export const IconTorrent = ({ size = 18 }: P) => (
+  <svg {...base(size)}><circle cx="12" cy="12" r="9" /><path d="M8 8v5a4 4 0 0 0 4 4h4" /></svg>
+);
 export const IconFile = ({ size = 18 }: P) => (
   <svg {...base(size)}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /></svg>
 );

@@ -101,6 +101,9 @@ export const api = {
     invoke<void>("remove_download", { id, deleteFile }),
   pauseAll: () => invoke<void>("pause_all"),
   resumeAll: () => invoke<void>("resume_all"),
+  /// A poster frame for a finished video, as a data: URI. Null for anything
+  /// that is not a readable video — the row shows its type icon instead.
+  videoThumbnail: (id: string) => invoke<string | null>("video_thumbnail", { id }),
   getQueue: () => invoke<DownloadView[]>("get_queue"),
   clearHistory: () => invoke<void>("clear_history"),
   getSettings: () => invoke<Settings>("get_settings"),

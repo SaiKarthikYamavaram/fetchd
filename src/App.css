@@ -699,6 +699,17 @@ input[type="checkbox"]:focus-visible {
 .type.image { color: #10b981; background: color-mix(in srgb, #10b981 13%, transparent); }
 .type.doc { color: #3b82f6; background: color-mix(in srgb, #3b82f6 13%, transparent); }
 .type.disc { color: #ec4899; background: color-mix(in srgb, #ec4899 13%, transparent); }
+/* The kinds added alongside the wider extension table. Hues are spaced so
+   neighbouring rows stay distinguishable, and each is paired with its own
+   glyph — colour is never the only signal. */
+.type.sheet { color: #22c55e; background: color-mix(in srgb, #22c55e 13%, transparent); }
+.type.slides { color: #fb923c; background: color-mix(in srgb, #fb923c 13%, transparent); }
+.type.book { color: #14b8a6; background: color-mix(in srgb, #14b8a6 13%, transparent); }
+.type.code { color: #06b6d4; background: color-mix(in srgb, #06b6d4 13%, transparent); }
+.type.font { color: #a855f7; background: color-mix(in srgb, #a855f7 13%, transparent); }
+.type.subs { color: #64748b; background: color-mix(in srgb, #64748b 16%, transparent); }
+.type.package { color: #eab308; background: color-mix(in srgb, #eab308 13%, transparent); }
+.type.torrent { color: #84cc16; background: color-mix(in srgb, #84cc16 13%, transparent); }
 
 .row-main { flex: 1; min-width: 0; }
 

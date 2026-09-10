@@ -750,6 +750,25 @@ impl AppState {
         }
     }
 
+    /// The file a completed download produced, if it is still there.
+    /// `None` while it is unfinished, or once the file has been moved away.
+    pub fn finished_file(&self, id: &str) -> Option<PathBuf> {
+        let queue = self.queue.lock().unwrap();
+        let entry = queue.iter().find(|d| d.id == id)?;
+        if entry.status != Status::Completed {
+            return None;
+        }
+        let path = entry.plan.final_path.clone();
+        std::fs::metadata(&path).ok().filter(|m| m.is_file())?;
+        Some(path)
+    }
+
+    /// Where poster frames are cached, beside the queue rather than in the
+    /// user's downloads.
+    pub fn thumb_dir(&self) -> PathBuf {
+        self.data_dir.join("thumbs")
+    }
+
     /// The partner to `pause_all`: put everything that stopped back in the
     /// queue. Completed entries are left alone — "resume" must never mean
     /// "download it again".

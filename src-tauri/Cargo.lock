@@ -1056,6 +1056,7 @@ dependencies = [
 name = "fetchd"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "fs4",
  "futures-util",
  "libc",

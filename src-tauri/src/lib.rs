@@ -3,6 +3,7 @@ mod download;
 mod queue;
 mod server;
 mod state;
+mod thumbs;
 mod throttle;
 mod ytdlp;
 
@@ -164,6 +165,44 @@ fn bulk_action(app: AppHandle, state: Shared<'_>, ids: Vec<String>, action: stat
 fn pause_all(app: AppHandle, state: Shared<'_>) {
     state.pause_all();
     state::emit_queue(&app, &state);
+}
+
+/// A poster frame for a finished video, as a `data:` URI.
+///
+/// Returned inline rather than as a file path: the webview cannot read an
+/// arbitrary local file without opening the asset protocol to the whole disk,
+/// and a 320px JPEG is a few KB. `None` covers everything that is not a video,
+/// not finished, or that ffmpeg could not read — the row falls back to its
+/// type icon, which is a perfectly good answer.
+#[tauri::command]
+async fn video_thumbnail(state: Shared<'_>, id: String) -> Result<Option<String>, String> {
+    let Some(path) = state.finished_file(&id) else {
+        return Ok(None);
+    };
+    if !thumbs::is_video_file(&path) {
+        return Ok(None);
+    }
+
+    let cached = thumbs::cache_path(&state.thumb_dir(), &id);
+    // Re-extracting on every render would launch a process per row per paint.
+    if tokio::fs::metadata(&cached).await.map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(encode_thumb(&cached).await);
+    }
+
+    let secs = thumbs::duration("ffprobe", &path).await;
+    match thumbs::extract("ffmpeg", &path, &cached, secs).await {
+        Some(_) => Ok(encode_thumb(&cached).await),
+        None => Ok(None),
+    }
+}
+
+async fn encode_thumb(path: &std::path::Path) -> Option<String> {
+    use base64::Engine;
+    let bytes = tokio::fs::read(path).await.ok()?;
+    Some(format!(
+        "data:image/jpeg;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
 }
 
 #[tauri::command]
@@ -345,6 +384,7 @@ pub fn run() {
             bulk_action,
             pause_all,
             resume_all,
+            video_thumbnail,
             get_queue,
             clear_history,
             get_settings,

@@ -15,12 +15,14 @@ import { DetailModal } from "./components/DetailModal";
 import { ConfirmDelete } from "./components/ConfirmDelete";
 import { RenameDialog } from "./components/RenameDialog";
 import * as selection from "./lib/selection";
+import { kindOf, type Kind } from "./lib/filetype";
 import { AddDialog } from "./components/AddDialog";
 import {
   IconArchive, IconDisc, IconDoc, IconDownload, IconFile,
   IconFolder, IconImage, IconImport, IconMusic, IconOpen, IconPause, IconPlay,
-  IconCheck, IconEdit, IconPlus, IconRetry, IconSearch, IconSelect, IconSettings,
-  IconTrash, IconVideo, IconX,
+  IconBook, IconCheck, IconCode, IconEdit, IconFont, IconPackage, IconPlus,
+  IconRetry, IconSearch, IconSelect, IconSettings, IconSheet, IconSlides,
+  IconSubs, IconTorrent, IconTrash, IconVideo, IconX,
 } from "./components/icons";
 import { Spinner, Dots } from "./components/Loaders";
 import "./App.css";
@@ -564,6 +566,33 @@ function Toast({
   );
 }
 
+/// The poster frame for a finished video, fetched once.
+///
+/// yt-dlp supplies a thumbnail URL for the sites it knows; this covers
+/// everything else — a plain .mp4, or a stream pulled from a manifest — by
+/// taking a frame from the file on disk. Null until it arrives, and null
+/// forever if ffmpeg is not installed or cannot read the file, in which case
+/// the row keeps its type icon.
+function usePoster(row: DownloadView): string | null {
+  const [poster, setPoster] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Only ask once the file exists and only when there is nothing better.
+    if (row.status !== "completed" || row.thumbnail || kindOf(row.filename) !== "video") {
+      setPoster(null);
+      return;
+    }
+    let live = true;
+    api
+      .videoThumbnail(row.id)
+      .then((data) => { if (live) setPoster(data); })
+      .catch(() => { /* no poster is a fine outcome */ });
+    return () => { live = false; };
+  }, [row.id, row.status, row.thumbnail, row.filename]);
+
+  return poster;
+}
+
 function Row({
   row, liveBytes, liveTotal, speed, onOpen, onDelete, onRename,
   selectMode, selected, onSelect, onFail,
@@ -593,6 +622,8 @@ function Row({
   const indeterminate = percent === null && downloaded > 0;
   const running = row.status === "downloading";
   const kind = fileKind(row.filename);
+  const poster = usePoster(row);
+  const preview = row.thumbnail ?? poster;
 
   return (
     <div
@@ -608,10 +639,10 @@ function Row({
         <span className="type picked" role="img" aria-label="Selected">
           <IconCheck size={22} />
         </span>
-      ) : row.thumbnail ? (
+      ) : preview ? (
         // Video preview thumbnail; overlay a small ring while downloading.
         <span className="thumb">
-          <img src={row.thumbnail} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.display = "none")} />
+          <img src={preview} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.display = "none")} />
           {running && percent !== null && (
             <span className="thumb-ring" style={{ ["--p" as string]: percent }}>
               <span className="ring-num">{Math.round(percent)}</span>
@@ -718,15 +749,29 @@ function Row({
   );
 }
 
-function fileKind(name: string): { icon: React.ReactNode; cls: string } {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["mp4", "mkv", "avi", "mov", "webm", "flv"].includes(ext)) return { icon: <IconVideo />, cls: "video" };
-  if (["mp3", "flac", "wav", "aac", "ogg", "m4a"].includes(ext)) return { icon: <IconMusic />, cls: "audio" };
-  if (["zip", "tar", "gz", "xz", "7z", "rar", "bz2"].includes(ext)) return { icon: <IconArchive />, cls: "archive" };
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(ext)) return { icon: <IconImage />, cls: "image" };
-  if (["pdf", "doc", "docx", "txt", "epub"].includes(ext)) return { icon: <IconDoc />, cls: "doc" };
-  if (["iso", "img", "dmg", "exe", "appimage", "deb", "rpm"].includes(ext)) return { icon: <IconDisc />, cls: "disc" };
-  return { icon: <IconFile />, cls: "file" };
+/// Glyph per kind. The kind itself comes from lib/filetype, which is where the
+/// extension table lives and is tested.
+const KIND_ICON: Record<Kind, React.ReactNode> = {
+  video: <IconVideo />,
+  audio: <IconMusic />,
+  archive: <IconArchive />,
+  image: <IconImage />,
+  doc: <IconDoc />,
+  sheet: <IconSheet />,
+  slides: <IconSlides />,
+  book: <IconBook />,
+  code: <IconCode />,
+  font: <IconFont />,
+  subs: <IconSubs />,
+  disc: <IconDisc />,
+  package: <IconPackage />,
+  torrent: <IconTorrent />,
+  file: <IconFile />,
+};
+
+function fileKind(name: string): { icon: React.ReactNode; cls: Kind } {
+  const kind = kindOf(name);
+  return { icon: KIND_ICON[kind], cls: kind };
 }
 
 export default App;

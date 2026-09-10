@@ -44,9 +44,6 @@ export type Settings = {
   video_quality: string;
   proxy: string;
   categorize: boolean;
-  schedule_enabled: boolean;
-  schedule_start: string;
-  schedule_stop: string;
   run_in_background: boolean;
   start_on_login: boolean;
   start_minimised: boolean;

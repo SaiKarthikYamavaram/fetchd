@@ -206,45 +206,6 @@ export function SettingsView() {
 
       <hr />
 
-      <h3>Schedule</h3>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={settings.schedule_enabled}
-          onChange={(e) => update({ schedule_enabled: e.currentTarget.checked }, true)}
-        />
-        <span>Only download during a set time window</span>
-      </label>
-      {settings.schedule_enabled && (
-        <>
-          <div className="field-row">
-            <label className="field">
-              <span>Start</span>
-              <input
-                type="time"
-                value={settings.schedule_start || "01:00"}
-                onChange={(e) => update({ schedule_start: e.currentTarget.value }, true)}
-              />
-            </label>
-            <label className="field">
-              <span>Stop</span>
-              <input
-                type="time"
-                value={settings.schedule_stop || "07:00"}
-                onChange={(e) => update({ schedule_stop: e.currentTarget.value }, true)}
-              />
-            </label>
-          </div>
-          <p className="help">
-            A stop time earlier than the start runs overnight (23:00–06:00 is one
-            window). Outside it, downloads wait as <em>Queued</em> and resume by
-            themselves when the window opens — partial files are kept.
-          </p>
-        </>
-      )}
-
-      <hr />
-
       <h3>Sites that block downloaders</h3>
       <p className="help">
         Some hosts sit behind an interactive anti-bot challenge and answer with{" "}

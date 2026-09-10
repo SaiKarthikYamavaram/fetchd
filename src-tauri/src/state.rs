@@ -1,4 +1,4 @@
-//! Shared application state and the queue scheduler.
+//! Shared application state and the download queue.
 //!
 //! Locking rule for everything here: the `Mutex` guards are held for plain
 //! data access only, and never across an `.await`. Parking a task on an
@@ -63,15 +63,6 @@ pub struct Settings {
     /// of the download folder. Ignored when a location is picked per download.
     #[serde(default)]
     pub categorize: bool,
-    /// Only transfer inside a daily time window.
-    #[serde(default)]
-    pub schedule_enabled: bool,
-    /// Window bounds as "HH:MM" local time. A stop earlier than the start means
-    /// the window runs over midnight (e.g. 23:00-06:00).
-    #[serde(default)]
-    pub schedule_start: String,
-    #[serde(default)]
-    pub schedule_stop: String,
     /// Closing the window hides to the tray and downloads carry on. Off makes
     /// the close button quit, which is what a user who does not want a
     /// background process expects.
@@ -85,7 +76,10 @@ pub struct Settings {
     /// Start fetchd with the desktop session. Written to the desktop's
     /// autostart entry, so it is real state on disk rather than a preference
     /// we consult.
-    #[serde(default)]
+    ///
+    /// Defaults true for the same reason as `run_in_background`: a download
+    /// manager is only useful when it is already there as a download arrives.
+    #[serde(default = "yes")]
     pub start_on_login: bool,
     /// Start minimised to the tray. Only meaningful with `start_on_login`:
     /// a launcher-started app should show itself.
@@ -113,13 +107,10 @@ impl Default for Settings {
             video_quality: "best".into(),
             proxy: String::new(),
             categorize: false,
-            schedule_enabled: false,
-            schedule_start: "01:00".into(),
-            schedule_stop: "07:00".into(),
             // On by default: this is a download manager, and closing the
             // window mid-transfer should not cancel the transfer.
             run_in_background: true,
-            start_on_login: false,
+            start_on_login: true,
             start_minimised: true,
         }
     }
@@ -831,27 +822,6 @@ impl AppState {
         self.save_queue();
     }
 
-    /// Stop active transfers because the scheduled window closed.
-    ///
-    /// They go back to `Queued`, not `Paused`: pausing is a user decision that
-    /// must survive, whereas these should resume by themselves when the window
-    /// reopens. Partial files are kept, so this costs nothing but a reconnect.
-    pub fn suspend_for_schedule(&self) {
-        let active: Vec<(String, Active)> = {
-            let mut map = self.active.lock().unwrap();
-            map.drain().collect()
-        };
-        if active.is_empty() {
-            return;
-        }
-        for (id, a) in active {
-            a.token.cancel();
-            self.record_progress(&id, a.progress.snapshot());
-            self.set_status(&id, Status::Queued, None);
-        }
-        self.save_queue();
-    }
-
     pub fn clear_history(&self) {
         self.queue.lock().unwrap().retain(|d| !d.is_terminal());
         self.save_queue();
@@ -884,12 +854,6 @@ impl AppState {
 /// state an unclean shutdown leaves behind, and the plan says it auto-resumes.
 pub fn pump(app: &AppHandle, state: &Arc<AppState>) {
     let settings = state.settings();
-    // Outside the scheduled window nothing new starts; entries stay Queued and
-    // the scheduler tick picks them up when the window opens.
-    if !within_schedule(&settings) {
-        emit_queue(app, state);
-        return;
-    }
     let max = settings.max_concurrent.max(1);
 
     // The claim in `claim_next` marks each entry Downloading under the queue
@@ -1523,44 +1487,6 @@ mod tests {
         assert_eq!(ids.len(), 500);
     }
 
-    // -- the scheduler ------------------------------------------------------
-
-    /// The window closing is not a user decision, so suspended transfers go
-    /// back to Queued and restart by themselves. Marking them Paused would need
-    /// a manual Resume every morning.
-    #[test]
-    fn schedule_suspend_queues_rather_than_pauses() {
-        let state = app();
-        push(&state, "s1");
-        state.set_status("s1", Status::Downloading, None);
-
-        let progress = crate::download::Progress::resumed(&[512]);
-        let token = tokio_util::sync::CancellationToken::new();
-        state.active.lock().unwrap().insert(
-            "s1".into(),
-            Active { token: token.clone(), progress, gen: 1 },
-        );
-
-        state.suspend_for_schedule();
-
-        assert_eq!(status_of(&state, "s1"), Status::Queued, "must auto-resume, not wait for the user");
-        assert!(token.is_cancelled(), "the transfer task must actually be stopped");
-        assert!(state.active.lock().unwrap().is_empty());
-        assert_eq!(
-            state.queue.lock().unwrap()[0].downloaded(),
-            512,
-            "the partial's offsets must be persisted, not lost"
-        );
-    }
-
-    #[test]
-    fn schedule_suspend_on_an_idle_queue_does_nothing() {
-        let state = app();
-        push(&state, "s2");
-        state.suspend_for_schedule();
-        assert_eq!(status_of(&state, "s2"), Status::Queued);
-    }
-
     // -- parked extension requests ------------------------------------------
 
     #[test]
@@ -1699,8 +1625,7 @@ mod tests {
         // would have made the close button quit for every existing user.
         assert!(s.run_in_background, "an absent field must not change how close behaves");
         assert!(s.start_minimised, "an absent field must not change how a login launch behaves");
-        // This one is genuinely off until asked for.
-        assert!(!s.start_on_login);
+        assert!(s.start_on_login, "an absent field must not disable autostart");
     }
 
     /// Settings arrive over IPC. An out-of-range concurrency would have `pump`
@@ -1982,49 +1907,6 @@ mod tests {
         assert_eq!(status_of(&state, "y"), Status::Paused);
     }
 
-    fn sched(start: &str, stop: &str) -> Settings {
-        Settings {
-            schedule_enabled: true,
-            schedule_start: start.into(),
-            schedule_stop: stop.into(),
-            ..Settings::default()
-        }
-    }
-
-    #[test]
-    fn schedule_window_parsing_and_wrap() {
-        assert_eq!(parse_hm("07:30"), Some(450));
-        assert_eq!(parse_hm(" 23:59 "), Some(1439));
-        assert_eq!(parse_hm("24:00"), None);
-        assert_eq!(parse_hm("07:60"), None);
-        assert_eq!(parse_hm("bogus"), None);
-
-        // Disabled means always allowed.
-        assert!(within_schedule(&Settings::default()));
-
-        // Unparseable bounds must not stall the queue forever.
-        assert!(within_schedule(&sched("nope", "07:00")));
-        // A zero-width window is treated as always on, not never.
-        assert!(within_schedule(&sched("03:00", "03:00")));
-    }
-
-    /// The wrap case is the one that is easy to get wrong: 23:00-06:00 is a
-    /// single overnight window, not an empty one.
-    #[test]
-    fn schedule_window_boundaries() {
-        // Same-day window 09:00-17:00.
-        let day = sched("09:00", "17:00");
-        for (now, want) in [(0, false), (539, false), (540, true), (1019, true), (1020, false)] {
-            assert_eq!(in_window(&day, now), want, "same-day at minute {now}");
-        }
-
-        // Overnight window 23:00-06:00.
-        let night = sched("23:00", "06:00");
-        for (now, want) in [(1379, false), (1380, true), (1439, true), (0, true), (359, true), (360, false)] {
-            assert_eq!(in_window(&night, now), want, "overnight at minute {now}");
-        }
-    }
-
     /// The add dialog's payload must deserialize exactly as the frontend sends
     /// it; a field-name mismatch here would silently drop the chosen folder.
     #[test]
@@ -2128,73 +2010,5 @@ mod tests {
         assert!(!file.exists(), "remove with delete must erase the file");
 
         std::fs::remove_dir_all(&dir).ok();
-    }
-}
-
-/// Minutes since local midnight, or `None` where the platform clock cannot be
-/// read (non-unix; the scheduler then behaves as always-open).
-#[cfg(unix)]
-fn local_minutes() -> Option<u32> {
-    // SAFETY: `localtime_r` writes into a zeroed `tm` we own, and `time` takes
-    // a null pointer to mean "return the value".
-    unsafe {
-        let t = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        if libc::localtime_r(&t, &mut tm).is_null() {
-            return None;
-        }
-        Some(tm.tm_hour as u32 * 60 + tm.tm_min as u32)
-    }
-}
-
-#[cfg(not(unix))]
-fn local_minutes() -> Option<u32> {
-    None
-}
-
-/// Parse "HH:MM" into minutes since midnight.
-fn parse_hm(value: &str) -> Option<u32> {
-    let (h, m) = value.trim().split_once(':')?;
-    let h: u32 = h.trim().parse().ok()?;
-    let m: u32 = m.trim().parse().ok()?;
-    if h > 23 || m > 59 {
-        return None;
-    }
-    Some(h * 60 + m)
-}
-
-/// Whether transfers are allowed right now.
-///
-/// A stop time earlier than the start wraps past midnight, so "23:00-06:00" is
-/// a single overnight window rather than an empty one. Anything unparseable
-/// leaves downloads running rather than silently stalling the queue.
-pub fn within_schedule(settings: &Settings) -> bool {
-    if !settings.schedule_enabled {
-        return true;
-    }
-    let Some(now) = local_minutes() else {
-        return true;
-    };
-    in_window(settings, now)
-}
-
-/// The window test with the clock injected, so the boundaries are testable.
-fn in_window(settings: &Settings, now: u32) -> bool {
-    if !settings.schedule_enabled {
-        return true;
-    }
-    let (Some(start), Some(stop)) = (
-        parse_hm(&settings.schedule_start),
-        parse_hm(&settings.schedule_stop),
-    ) else {
-        return true;
-    };
-    if start == stop {
-        return true; // degenerate window: treat as always on
-    }
-    if start < stop {
-        now >= start && now < stop
-    } else {
-        now >= start || now < stop
     }
 }

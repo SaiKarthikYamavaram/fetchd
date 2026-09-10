@@ -205,19 +205,67 @@ async fn encode_thumb(path: &std::path::Path) -> Option<String> {
     ))
 }
 
+/// Whether the autostart entry on disk still points at the binary running now.
+///
+/// `is_enabled` only asks whether the entry file exists. It cannot tell that
+/// the entry names a path this app no longer lives at — a release build
+/// replacing a dev one, a reinstall to a different prefix, or the project
+/// simply being moved. The entry survives, `Exec=` points at nothing, and
+/// autostart silently does nothing at the next boot with the setting still
+/// showing "on".
+#[cfg(target_os = "linux")]
+fn autostart_entry_is_current() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return true; // cannot compare; leave the entry alone
+    };
+    let Some(home) = dirs_home() else { return true };
+    let entry = home.join(".config/autostart/fetchd.desktop");
+    let Ok(text) = std::fs::read_to_string(&entry) else {
+        return true; // no entry to be stale
+    };
+    let exe = exe.to_string_lossy();
+    text.lines()
+        .find_map(|l| l.strip_prefix("Exec="))
+        .is_some_and(|cmd| cmd.split_whitespace().next() == Some(exe.as_ref()))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn autostart_entry_is_current() -> bool {
+    // Only the XDG entry is a plain file we can read back; the macOS and
+    // Windows mechanisms are managed by the OS.
+    true
+}
+
+#[cfg(target_os = "linux")]
+fn dirs_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
+}
+
 /// Put the autostart entry in whatever state the settings ask for.
 ///
 /// Reconciled rather than toggled: the entry is a file on disk that the user
-/// (or another app, or a reinstall) can change behind our back, so the
-/// setting is the intent and this makes the disk match it.
+/// (or another app, or a reinstall) can change behind our back, so the setting
+/// is the intent and this makes the disk match it — including rewriting an
+/// entry that still exists but points at a path this app has moved away from.
 fn apply_autostart(app: &AppHandle, want: bool) {
     use tauri_plugin_autostart::ManagerExt;
 
     let manager = app.autolaunch();
     let enabled = manager.is_enabled().unwrap_or(false);
-    if enabled == want {
+    let stale = enabled && want && !autostart_entry_is_current();
+
+    if enabled == want && !stale {
         return;
     }
+    if stale {
+        // Rewrite by removing first: `enable` will not replace an entry it
+        // believes is already correct.
+        if let Err(e) = manager.disable() {
+            eprintln!("fetchd: could not replace the stale autostart entry: {e}");
+            return;
+        }
+    }
+
     let result = if want { manager.enable() } else { manager.disable() };
     if let Err(e) = result {
         // Not fatal: a desktop without an autostart directory, or a sandbox

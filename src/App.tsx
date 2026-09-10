@@ -65,6 +65,26 @@ const STATUS_DOT: Record<Status, string> = {
   failed: "bg-destructive",
 };
 
+// One tint per file kind, so the list reads by color before it reads by
+// label — a shelf of genres, not a column of identical gray squares.
+const KIND_STYLE: Record<Kind, string> = {
+  video: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
+  audio: "bg-pink-500/15 text-pink-600 dark:text-pink-400",
+  archive: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  image: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  doc: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+  sheet: "bg-green-500/15 text-green-600 dark:text-green-400",
+  slides: "bg-orange-500/15 text-orange-600 dark:text-orange-400",
+  book: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-400",
+  code: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
+  font: "bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400",
+  subs: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400",
+  disc: "bg-purple-500/15 text-purple-600 dark:text-purple-400",
+  package: "bg-lime-500/15 text-lime-700 dark:text-lime-400",
+  torrent: "bg-red-500/15 text-red-600 dark:text-red-400",
+  file: "bg-muted text-muted-foreground",
+};
+
 /// The spool mark: a ring broken into four segments — the connections a
 /// download is split across.
 function Logo({ size = 18 }: { size?: number }) {
@@ -303,15 +323,23 @@ function App() {
   }, []);
 
   return (
-    <div className="mx-auto flex h-screen max-w-3xl flex-col px-4">
+    <div className="relative mx-auto flex h-screen max-w-3xl flex-col overflow-hidden">
+      {/* Ambient glow. Purely decorative, so hidden from assistive tech and
+          pinned behind everything else. */}
+      <div aria-hidden="true" className="pointer-events-none fixed -top-40 -left-40 -z-10 size-[28rem] rounded-full bg-primary/25 blur-3xl" />
+      <div aria-hidden="true" className="pointer-events-none fixed top-1/3 -right-40 -z-10 size-96 rounded-full bg-violet-500/20 blur-3xl" />
+      <div aria-hidden="true" className="pointer-events-none fixed -bottom-40 left-1/4 -z-10 size-96 rounded-full bg-fuchsia-500/10 blur-3xl" />
+
       <Toaster />
 
-      <header className="flex items-center justify-between gap-3 border-b py-3">
-        <div className="flex items-center gap-2">
-          <span className="text-primary"><Logo size={18} /></span>
-          <span className="font-semibold">spool</span>
+      <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-border/60 bg-background/70 px-4 py-3 backdrop-blur-md">
+        <div className="flex items-center gap-2.5">
+          <span className="flex size-8 items-center justify-center rounded-full bg-gradient-to-br from-primary to-violet-500 text-primary-foreground ring-4 ring-primary/10">
+            <Logo size={17} />
+          </span>
+          <span className="bg-gradient-to-r from-primary to-violet-500 bg-clip-text text-[15px] font-bold tracking-tight text-transparent">spool</span>
           {totalSpeed > 0 && (
-            <Badge variant="secondary" className="gap-1.5">
+            <Badge variant="secondary" className="gap-1.5 border border-primary/20 bg-primary/10 text-primary">
               <span className="size-1.5 rounded-full bg-primary animate-pulse" />
               {formatBytes(totalSpeed)}/s
             </Badge>
@@ -321,6 +349,7 @@ function App() {
           <Button
             variant="ghost"
             size="icon"
+            className="rounded-full"
             title="Pause all"
             onClick={() => api.pauseAll().catch(report)}
             disabled={!active.length}
@@ -330,6 +359,7 @@ function App() {
           <Button
             variant="ghost"
             size="icon"
+            className="rounded-full"
             title="Resume all"
             onClick={() => api.resumeAll().catch(report)}
             disabled={!stopped.length}
@@ -339,6 +369,7 @@ function App() {
           <Button
             variant={showSettings ? "secondary" : "ghost"}
             size="icon"
+            className="rounded-full"
             title="Settings"
             onClick={() => setShowSettings((s) => !s)}
           >
@@ -347,15 +378,16 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto py-4">
+      <main className="flex-1 overflow-y-auto px-4 py-4">
         {showSettings ? (
           <SettingsView />
         ) : (
           <>
             {/* The widest field on the screen belongs to the thing done most
                 often. Adding is a deliberate act with several answers to give,
-                so it opens the dialog that asks for them. */}
-            <div className="flex gap-2">
+                so it opens the dialog that asks for them. One elevated bar
+                rather than three loose controls floating on the page. */}
+            <div className="flex items-center gap-1 rounded-xl border bg-card/60 p-1.5 shadow-sm backdrop-blur-sm">
               <div className="relative flex-1">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -366,7 +398,7 @@ function App() {
                   spellCheck={false}
                   aria-label="Filter downloads"
                   autoFocus
-                  className="pl-8 pr-8"
+                  className="border-0 bg-transparent pl-8 pr-8 shadow-none focus-visible:ring-0"
                 />
                 {query && (
                   <Button
@@ -381,11 +413,13 @@ function App() {
                   </Button>
                 )}
               </div>
+              <div className="h-5 w-px shrink-0 bg-border" />
               {/* Both ways of bringing a download in, side by side and spelled
                   out. The toolbar keeps only what acts on the whole queue. */}
               <Button
-                variant="outline"
+                variant="ghost"
                 type="button"
+                className="shrink-0 rounded-lg"
                 onClick={() => { setPendingMulti(true); setPendingUrl(""); }}
               >
                 <Download /> Import
@@ -394,6 +428,7 @@ function App() {
                   a new entry, and the brand already owns the download glyph. */}
               <Button
                 type="button"
+                className="shrink-0 rounded-lg bg-gradient-to-r from-primary to-violet-500 shadow-sm transition-shadow hover:opacity-90 hover:shadow-md"
                 onClick={() => { setPendingMulti(false); setPendingUrl(""); }}
               >
                 <Plus /> Add
@@ -431,10 +466,10 @@ function App() {
               ) : (
                 <>
                   <Tabs value={filter} onValueChange={(v) => setFilter(v as Filter)}>
-                    <TabsList>
-                      <TabsTrigger value="all">All <Badge variant="secondary">{rows.length}</Badge></TabsTrigger>
-                      <TabsTrigger value="active">Active <Badge variant="secondary">{active.length}</Badge></TabsTrigger>
-                      <TabsTrigger value="done">Done <Badge variant="secondary">{done.length}</Badge></TabsTrigger>
+                    <TabsList variant="line">
+                      <TabsTrigger value="all">All <Badge variant="secondary" className="px-1.5">{rows.length}</Badge></TabsTrigger>
+                      <TabsTrigger value="active">Active <Badge variant="secondary" className="px-1.5">{active.length}</Badge></TabsTrigger>
+                      <TabsTrigger value="done">Done <Badge variant="secondary" className="px-1.5">{done.length}</Badge></TabsTrigger>
                     </TabsList>
                   </Tabs>
                   {/* Selection starts from the strip it will take over, next
@@ -476,8 +511,10 @@ function App() {
                 />
               ))}
               {visible.length === 0 && (
-                <div className="flex flex-col items-center gap-2 py-16 text-center">
-                  <Download className="size-8 text-muted-foreground" />
+                <div className="flex flex-col items-center gap-3 py-20 text-center">
+                  <span className="flex size-16 items-center justify-center rounded-full bg-gradient-to-br from-primary/20 to-violet-500/20 ring-8 ring-primary/5">
+                    <Download className="size-7 text-primary" />
+                  </span>
                   <p className="font-medium">
                     {query
                       ? "Nothing matches that"
@@ -609,8 +646,8 @@ function Row({
   return (
     <Card
       className={cn(
-        "flex-row items-center gap-3 p-3",
-        selected && "border-primary bg-accent/40",
+        "flex-row items-center gap-3 bg-card/70 p-3 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:shadow-lg",
+        selected ? "border-primary bg-accent/40" : "hover:border-primary/40",
         selectMode && "cursor-pointer",
       )}
       // In selection mode the whole row is the target, so the tile is an
@@ -620,7 +657,7 @@ function Row({
       {/* Selection has no column of its own: a picked row swaps its file-type
           tile for a filled check, so entering the mode never re-flows the row
           and an idle list carries no controls at all. */}
-      <div className="relative flex size-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+      <div className="relative flex size-10 shrink-0 items-center justify-center">
         {selected ? (
           <span className="flex size-10 items-center justify-center rounded-md bg-primary text-primary-foreground" role="img" aria-label="Selected">
             <Check className="size-5" />
@@ -642,12 +679,18 @@ function Row({
             )}
           </>
         ) : running && percent !== null ? (
-          <RingProgress percent={percent} size={36} />
+          <span className="flex size-10 items-center justify-center rounded-md bg-muted">
+            <RingProgress percent={percent} size={36} />
+          </span>
         ) : running ? (
           // Unknown size: no percentage to show, so a quiet spinner.
-          <Loader2 className="size-5 animate-spin text-primary" />
+          <span className="flex size-10 items-center justify-center rounded-md bg-muted">
+            <Loader2 className="size-5 animate-spin text-primary" />
+          </span>
         ) : (
-          kind.icon
+          <span className={cn("flex size-10 items-center justify-center rounded-md", kind.className)}>
+            {kind.icon}
+          </span>
         )}
       </div>
 
@@ -777,9 +820,9 @@ const KIND_ICON: Record<Kind, React.ReactNode> = {
   file: <File className="size-5" />,
 };
 
-function fileKind(name: string): { icon: React.ReactNode; cls: Kind } {
+function fileKind(name: string): { icon: React.ReactNode; className: string } {
   const kind = kindOf(name);
-  return { icon: KIND_ICON[kind], cls: kind };
+  return { icon: KIND_ICON[kind], className: KIND_STYLE[kind] };
 }
 
 export default App;

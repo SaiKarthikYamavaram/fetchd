@@ -1,14 +1,35 @@
 import { useEffect, useRef, useState } from "react";
-import { Folder } from "lucide-react";
+import { Folder, Gauge, Power, ShieldAlert, Video } from "lucide-react";
 import { api, type Settings } from "../lib/api";
 import { applyTheme } from "../lib/theme";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
-import { Separator } from "./ui/separator";
 import { Switch } from "./ui/switch";
+
+/// One settings section: an icon-badged card title, its fields as children.
+/// Keeps the page a stack of named, scannable groups instead of one long
+/// column of unrelated-looking rows.
+function Section({
+  icon, title, children,
+}: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+  return (
+    <Card className="gap-4 bg-card/60 py-5 backdrop-blur-sm">
+      <CardHeader className="px-5">
+        <CardTitle className="flex items-center gap-2.5 text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <span className="flex size-7 items-center justify-center rounded-full bg-primary/10 text-primary">
+            {icon}
+          </span>
+          {title}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 px-5">{children}</CardContent>
+    </Card>
+  );
+}
 
 export function SettingsView() {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -61,248 +82,249 @@ export function SettingsView() {
   }
 
   return (
-    <section className="mx-auto max-w-2xl space-y-6 pb-8">
-      <div className="flex items-center gap-2">
+    <section className="mx-auto max-w-2xl space-y-4 pb-8">
+      <div className="flex items-center gap-2 px-1">
         <h2 className="text-lg font-semibold">Settings</h2>
-        {saved && <Badge variant="secondary">Saved</Badge>}
+        {saved && <Badge variant="secondary" className="border border-primary/20 bg-primary/10 text-primary">Saved</Badge>}
       </div>
 
-      <div className="space-y-1.5">
-        <Label>Download folder</Label>
-        <div className="flex gap-2">
-          <Input
-            value={settings.download_dir ?? ""}
-            placeholder="~/Downloads"
-            spellCheck={false}
-            onChange={(e) =>
-              update({ download_dir: e.currentTarget.value.trim() || null })
-            }
-          />
-          <Button
-            type="button"
-            variant="outline"
-            onClick={async () => {
-              const picked = await api.pickFolder(settings.download_dir ?? undefined);
-              // Commit immediately: a picked path is a deliberate choice, not
-              // mid-typing, so it should not wait on the debounce.
-              if (picked) update({ download_dir: picked }, true);
-            }}
-          >
-            <Folder /> Browse
-          </Button>
-        </div>
-      </div>
-
-      <Label className="flex items-center gap-2 font-normal">
-        <Switch
-          checked={settings.categorize}
-          onCheckedChange={(v) => update({ categorize: v }, true)}
-        />
-        Sort into folders by type (Video, Audio, Archives, …)
-      </Label>
-
-      <div className="grid grid-cols-2 gap-4">
+      <Section icon={<Folder className="size-3.5" />} title="Downloads">
         <div className="space-y-1.5">
-          <Label>Concurrent downloads</Label>
-          <Input
-            type="number"
-            min={1}
-            max={10}
-            value={settings.max_concurrent}
-            onChange={(e) =>
-              update({ max_concurrent: Math.max(1, Number(e.currentTarget.value) || 1) })
-            }
-          />
+          <Label>Download folder</Label>
+          <div className="flex gap-2">
+            <Input
+              value={settings.download_dir ?? ""}
+              placeholder="~/Downloads"
+              spellCheck={false}
+              onChange={(e) =>
+                update({ download_dir: e.currentTarget.value.trim() || null })
+              }
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={async () => {
+                const picked = await api.pickFolder(settings.download_dir ?? undefined);
+                // Commit immediately: a picked path is a deliberate choice, not
+                // mid-typing, so it should not wait on the debounce.
+                if (picked) update({ download_dir: picked }, true);
+              }}
+            >
+              <Folder /> Browse
+            </Button>
+          </div>
         </div>
 
-        <div className="space-y-1.5">
-          <Label>Connections per download</Label>
-          <Input
-            type="number"
-            min={1}
-            max={8}
-            value={settings.segments}
-            onChange={(e) =>
-              update({
-                segments: Math.min(8, Math.max(1, Number(e.currentTarget.value) || 1)),
-              })
-            }
-          />
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Appearance</Label>
-        <Select
-          value={settings.theme || "system"}
-          onValueChange={(theme) => {
-            applyTheme(theme); // repaint now, don't wait for the round trip
-            update({ theme }, true);
-          }}
-        >
-          <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="system">Match system</SelectItem>
-            <SelectItem value="light">Light</SelectItem>
-            <SelectItem value="dark">Dark</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Speed limit (KB/s, 0 = unlimited)</Label>
-        <Input
-          type="number"
-          min={0}
-          step={50}
-          value={settings.bandwidth_kb}
-          onChange={(e) =>
-            update({ bandwidth_kb: Math.max(0, Number(e.currentTarget.value) || 0) })
-          }
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>Proxy (blank = direct)</Label>
-        <Input
-          value={settings.proxy}
-          placeholder="http://host:8080  or  socks5://host:1080"
-          spellCheck={false}
-          onChange={(e) => update({ proxy: e.currentTarget.value.trim() })}
-        />
-        <p className="text-sm text-muted-foreground">
-          Applies to file downloads and to yt-dlp. Takes effect on the next
-          download; transfers already running keep their current connection.
-        </p>
-      </div>
-
-      <Separator />
-
-      <h3 className="text-sm font-semibold">Startup &amp; background</h3>
-      <Label className="flex items-center gap-2 font-normal">
-        <Switch
-          checked={settings.run_in_background}
-          onCheckedChange={(v) => update({ run_in_background: v }, true)}
-        />
-        Keep running in the tray when the window is closed
-      </Label>
-      <p className="text-sm text-muted-foreground">
-        {settings.run_in_background
-          ? "Downloads carry on after you close the window. Quit from the tray icon to stop them."
-          : "Closing the window quits spool. Anything still downloading is paused and resumes next launch."}
-      </p>
-
-      <Label className="flex items-center gap-2 font-normal">
-        <Switch
-          checked={settings.start_on_login}
-          onCheckedChange={(v) => update({ start_on_login: v }, true)}
-        />
-        Start spool automatically when this computer starts
-      </Label>
-      {settings.start_on_login && (
         <Label className="flex items-center gap-2 font-normal">
           <Switch
-            checked={settings.start_minimised}
-            onCheckedChange={(v) => update({ start_minimised: v }, true)}
+            checked={settings.categorize}
+            onCheckedChange={(v) => update({ categorize: v }, true)}
           />
-          Start in the tray, without opening the window
+          Sort into folders by type (Video, Audio, Archives, …)
         </Label>
-      )}
 
-      <Separator />
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label>Concurrent downloads</Label>
+            <Input
+              type="number"
+              min={1}
+              max={10}
+              value={settings.max_concurrent}
+              onChange={(e) =>
+                update({ max_concurrent: Math.max(1, Number(e.currentTarget.value) || 1) })
+              }
+            />
+          </div>
 
-      <h3 className="text-sm font-semibold">Sites that block downloaders</h3>
-      <p className="text-sm text-muted-foreground">
-        Some hosts sit behind an interactive anti-bot challenge and answer with{" "}
-        <code>403</code>. No download manager can solve one — not this app, not IDM.
-        What IDM actually does is let the <em>browser</em> solve it and then reuse
-        that session. Do the same here: export your cookies and point spool at
-        the file.
-      </p>
-      <p className="text-sm text-muted-foreground">
-        Export with a "cookies.txt" browser extension, or run{" "}
-        <code>yt-dlp --cookies-from-browser brave --cookies ~/cookies.txt --skip-download URL</code>.
-        The User-Agent below must match the browser the cookies came from — a{" "}
-        <code>cf_clearance</code> cookie is bound to the exact agent that earned it.
-      </p>
+          <div className="space-y-1.5">
+            <Label>Connections per download</Label>
+            <Input
+              type="number"
+              min={1}
+              max={8}
+              value={settings.segments}
+              onChange={(e) =>
+                update({
+                  segments: Math.min(8, Math.max(1, Number(e.currentTarget.value) || 1)),
+                })
+              }
+            />
+          </div>
+        </div>
 
-      <div className="space-y-1.5">
-        <Label>Cookies file (Netscape format)</Label>
-        <Input
-          value={settings.cookies_file ?? ""}
-          placeholder="/home/you/cookies.txt"
-          spellCheck={false}
-          onChange={(e) =>
-            update({ cookies_file: e.currentTarget.value.trim() || null })
-          }
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label>User-Agent</Label>
-        <Input
-          value={settings.user_agent ?? ""}
-          placeholder="(default Chrome on Linux)"
-          spellCheck={false}
-          onChange={(e) =>
-            update({ user_agent: e.currentTarget.value.trim() || null })
-          }
-        />
-      </div>
-
-      <Separator />
-
-      <h3 className="text-sm font-semibold">Video downloads (yt-dlp)</h3>
-      <p className="text-sm text-muted-foreground">
-        Streaming sites (YouTube, Vimeo, and ~1800 more) are handled by{" "}
-        <code>yt-dlp</code>, which must be installed. Right-click a page and choose{" "}
-        <em>Download video with spool</em>, or paste a video URL — known sites are
-        auto-detected.
-      </p>
-
-      <div className="space-y-1.5">
-        <Label>Quality</Label>
-        <Select
-          value={settings.video_quality || "best"}
-          onValueChange={(v) => update({ video_quality: v }, true)}
-        >
-          <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="best">Best available</SelectItem>
-            <SelectItem value="2160">2160p (4K)</SelectItem>
-            <SelectItem value="1440">1440p</SelectItem>
-            <SelectItem value="1080">1080p</SelectItem>
-            <SelectItem value="720">720p</SelectItem>
-            <SelectItem value="480">480p</SelectItem>
-            <SelectItem value="audio">Audio only (mp3)</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
-          <Label>yt-dlp path</Label>
+          <Label>Appearance</Label>
+          <Select
+            value={settings.theme || "system"}
+            onValueChange={(theme) => {
+              applyTheme(theme); // repaint now, don't wait for the round trip
+              update({ theme }, true);
+            }}
+          >
+            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="system">Match system</SelectItem>
+              <SelectItem value="light">Light</SelectItem>
+              <SelectItem value="dark">Dark</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </Section>
+
+      <Section icon={<Gauge className="size-3.5" />} title="Bandwidth & network">
+        <div className="space-y-1.5">
+          <Label>Speed limit (KB/s, 0 = unlimited)</Label>
           <Input
-            value={settings.ytdlp_path}
-            placeholder="yt-dlp"
-            spellCheck={false}
-            onChange={(e) => update({ ytdlp_path: e.currentTarget.value.trim() })}
+            type="number"
+            min={0}
+            step={50}
+            value={settings.bandwidth_kb}
+            onChange={(e) =>
+              update({ bandwidth_kb: Math.max(0, Number(e.currentTarget.value) || 0) })
+            }
           />
         </div>
+
         <div className="space-y-1.5">
-          <Label>Cookies from browser</Label>
+          <Label>Proxy (blank = direct)</Label>
           <Input
-            value={settings.cookies_browser}
-            placeholder="e.g. brave, chrome, firefox"
+            value={settings.proxy}
+            placeholder="http://host:8080  or  socks5://host:1080"
             spellCheck={false}
-            onChange={(e) => update({ cookies_browser: e.currentTarget.value.trim() })}
+            onChange={(e) => update({ proxy: e.currentTarget.value.trim() })}
+          />
+          <p className="text-sm text-muted-foreground">
+            Applies to file downloads and to yt-dlp. Takes effect on the next
+            download; transfers already running keep their current connection.
+          </p>
+        </div>
+      </Section>
+
+      <Section icon={<Power className="size-3.5" />} title="Startup & background">
+        <Label className="flex items-center gap-2 font-normal">
+          <Switch
+            checked={settings.run_in_background}
+            onCheckedChange={(v) => update({ run_in_background: v }, true)}
+          />
+          Keep running in the tray when the window is closed
+        </Label>
+        <p className="text-sm text-muted-foreground">
+          {settings.run_in_background
+            ? "Downloads carry on after you close the window. Quit from the tray icon to stop them."
+            : "Closing the window quits spool. Anything still downloading is paused and resumes next launch."}
+        </p>
+
+        <Label className="flex items-center gap-2 font-normal">
+          <Switch
+            checked={settings.start_on_login}
+            onCheckedChange={(v) => update({ start_on_login: v }, true)}
+          />
+          Start spool automatically when this computer starts
+        </Label>
+        {settings.start_on_login && (
+          <Label className="flex items-center gap-2 font-normal">
+            <Switch
+              checked={settings.start_minimised}
+              onCheckedChange={(v) => update({ start_minimised: v }, true)}
+            />
+            Start in the tray, without opening the window
+          </Label>
+        )}
+      </Section>
+
+      <Section icon={<ShieldAlert className="size-3.5" />} title="Sites that block downloaders">
+        <p className="text-sm text-muted-foreground">
+          Some hosts sit behind an interactive anti-bot challenge and answer with{" "}
+          <code>403</code>. No download manager can solve one — not this app, not IDM.
+          What IDM actually does is let the <em>browser</em> solve it and then reuse
+          that session. Do the same here: export your cookies and point spool at
+          the file.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Export with a "cookies.txt" browser extension, or run{" "}
+          <code>yt-dlp --cookies-from-browser brave --cookies ~/cookies.txt --skip-download URL</code>.
+          The User-Agent below must match the browser the cookies came from — a{" "}
+          <code>cf_clearance</code> cookie is bound to the exact agent that earned it.
+        </p>
+
+        <div className="space-y-1.5">
+          <Label>Cookies file (Netscape format)</Label>
+          <Input
+            value={settings.cookies_file ?? ""}
+            placeholder="/home/you/cookies.txt"
+            spellCheck={false}
+            onChange={(e) =>
+              update({ cookies_file: e.currentTarget.value.trim() || null })
+            }
           />
         </div>
-      </div>
-      <p className="text-sm text-muted-foreground">
-        Cookies from a browser let yt-dlp fetch age-restricted or members-only
-        videos. Leave blank to use the cookies file above, or nothing.
-      </p>
+
+        <div className="space-y-1.5">
+          <Label>User-Agent</Label>
+          <Input
+            value={settings.user_agent ?? ""}
+            placeholder="(default Chrome on Linux)"
+            spellCheck={false}
+            onChange={(e) =>
+              update({ user_agent: e.currentTarget.value.trim() || null })
+            }
+          />
+        </div>
+      </Section>
+
+      <Section icon={<Video className="size-3.5" />} title="Video downloads (yt-dlp)">
+        <p className="text-sm text-muted-foreground">
+          Streaming sites (YouTube, Vimeo, and ~1800 more) are handled by{" "}
+          <code>yt-dlp</code>, which must be installed. Right-click a page and choose{" "}
+          <em>Download video with spool</em>, or paste a video URL — known sites are
+          auto-detected.
+        </p>
+
+        <div className="space-y-1.5">
+          <Label>Quality</Label>
+          <Select
+            value={settings.video_quality || "best"}
+            onValueChange={(v) => update({ video_quality: v }, true)}
+          >
+            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="best">Best available</SelectItem>
+              <SelectItem value="2160">2160p (4K)</SelectItem>
+              <SelectItem value="1440">1440p</SelectItem>
+              <SelectItem value="1080">1080p</SelectItem>
+              <SelectItem value="720">720p</SelectItem>
+              <SelectItem value="480">480p</SelectItem>
+              <SelectItem value="audio">Audio only (mp3)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label>yt-dlp path</Label>
+            <Input
+              value={settings.ytdlp_path}
+              placeholder="yt-dlp"
+              spellCheck={false}
+              onChange={(e) => update({ ytdlp_path: e.currentTarget.value.trim() })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Cookies from browser</Label>
+            <Input
+              value={settings.cookies_browser}
+              placeholder="e.g. brave, chrome, firefox"
+              spellCheck={false}
+              onChange={(e) => update({ cookies_browser: e.currentTarget.value.trim() })}
+            />
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Cookies from a browser let yt-dlp fetch age-restricted or members-only
+          videos. Leave blank to use the cookies file above, or nothing.
+        </p>
+      </Section>
     </section>
   );
 }

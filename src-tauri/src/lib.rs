@@ -167,6 +167,12 @@ fn pause_all(app: AppHandle, state: Shared<'_>) {
 }
 
 #[tauri::command]
+fn resume_all(app: AppHandle, state: Shared<'_>) {
+    state.resume_all();
+    state::pump(&app, &state);
+}
+
+#[tauri::command]
 fn get_queue(state: Shared<'_>) -> Vec<DownloadView> {
     state.views()
 }
@@ -318,6 +324,7 @@ pub fn run() {
             rename_download,
             bulk_action,
             pause_all,
+            resume_all,
             get_queue,
             clear_history,
             get_settings,

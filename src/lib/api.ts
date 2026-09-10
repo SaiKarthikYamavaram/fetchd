@@ -100,6 +100,7 @@ export const api = {
   remove: (id: string, deleteFile: boolean) =>
     invoke<void>("remove_download", { id, deleteFile }),
   pauseAll: () => invoke<void>("pause_all"),
+  resumeAll: () => invoke<void>("resume_all"),
   getQueue: () => invoke<DownloadView[]>("get_queue"),
   clearHistory: () => invoke<void>("clear_history"),
   getSettings: () => invoke<Settings>("get_settings"),

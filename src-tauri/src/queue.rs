@@ -133,6 +133,38 @@ pub fn load_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
     serde_json::from_slice(&body).ok()
 }
 
+/// Load the queue, and never silently discard a file we could not read.
+///
+/// `load_json` returns `None` both for "no file yet" and for "the file is
+/// there but will not parse". Treating the second like the first starts the
+/// app with an empty queue and the next checkpoint overwrites the original —
+/// the user's whole download list, gone, with nothing to recover from. So an
+/// unreadable file is moved aside first, and the path is reported.
+pub fn load_queue(path: &Path) -> Vec<Download> {
+    let body = match std::fs::read(path) {
+        Ok(body) => body,
+        Err(_) => return Vec::new(), // first run
+    };
+    match serde_json::from_slice(&body) {
+        Ok(queue) => queue,
+        Err(e) => {
+            let aside = path.with_file_name(format!("queue.unreadable-{}.json", now_secs()));
+            match std::fs::rename(path, &aside) {
+                Ok(()) => eprintln!(
+                    "fetchd: {} could not be read ({e}); kept a copy at {}",
+                    path.display(),
+                    aside.display()
+                ),
+                Err(move_err) => eprintln!(
+                    "fetchd: {} could not be read ({e}) and could not be moved aside ({move_err})",
+                    path.display()
+                ),
+            }
+            Vec::new()
+        }
+    }
+}
+
 fn tmp_path(path: &Path) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".tmp");
@@ -263,6 +295,47 @@ mod tests {
 
         assert!(!path.with_file_name("queue.json.tmp").exists());
         assert_eq!(load_json::<Vec<u8>>(&path), Some(vec![4, 5]), "the second write wins");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The whole point of the quarantine: a queue.json that will not parse must
+    /// survive the launch that could not read it, because the next checkpoint
+    /// overwrites the file.
+    #[test]
+    fn an_unreadable_queue_is_moved_aside_not_dropped() {
+        let dir = std::env::temp_dir().join(format!("fetchd-quarantine-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("queue.json");
+        std::fs::write(&path, b"{ this is not the queue }").unwrap();
+
+        assert!(load_queue(&path).is_empty(), "an unreadable queue starts empty");
+        assert!(!path.exists(), "the unreadable file must not be left in place to be overwritten");
+
+        let kept: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("queue.unreadable-"))
+            .collect();
+        assert_eq!(kept.len(), 1, "expected one quarantined copy, found {kept:?}");
+        assert_eq!(
+            std::fs::read(dir.join(&kept[0])).unwrap(),
+            b"{ this is not the queue }",
+            "the original bytes must be preserved verbatim"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_missing_queue_file_is_simply_empty() {
+        let dir = std::env::temp_dir().join(format!("fetchd-firstrun-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(load_queue(&dir.join("queue.json")).is_empty());
+        // Nothing to quarantine on a first run.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

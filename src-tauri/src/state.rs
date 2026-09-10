@@ -210,8 +210,7 @@ impl AppState {
         let settings: Settings =
             queue::load_json(&config_dir.join("settings.json")).unwrap_or_default();
 
-        let mut downloads: Vec<Download> =
-            queue::load_json(&data_dir.join("queue.json")).unwrap_or_default();
+        let mut downloads: Vec<Download> = queue::load_queue(&data_dir.join("queue.json"));
 
         // Apply the restart state table before anything can observe the queue.
         for d in &mut downloads {
@@ -748,6 +747,23 @@ impl AppState {
             .collect();
         for id in ids {
             self.pause(&id);
+        }
+    }
+
+    /// The partner to `pause_all`: put everything that stopped back in the
+    /// queue. Completed entries are left alone — "resume" must never mean
+    /// "download it again".
+    pub fn resume_all(&self) {
+        let ids: Vec<String> = self
+            .queue
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|d| matches!(d.status, Status::Paused | Status::Interrupted | Status::Failed))
+            .map(|d| d.id.clone())
+            .collect();
+        for id in ids {
+            self.resume(&id);
         }
     }
 
@@ -1408,6 +1424,28 @@ mod tests {
         assert_eq!(status_of(&state, "p1"), Status::Paused);
         assert_eq!(status_of(&state, "p2"), Status::Completed);
         assert_eq!(status_of(&state, "p3"), Status::Failed);
+    }
+
+    /// The partner to pause_all. A finished download must not be re-queued:
+    /// "resume all" would silently re-download the user's whole history.
+    #[test]
+    fn resume_all_requeues_only_what_stopped() {
+        let state = app();
+        for i in 0..5 {
+            push(&state, &format!("r{i}"));
+        }
+        state.set_status("r0", Status::Paused, None);
+        state.set_status("r1", Status::Interrupted, None);
+        state.set_status("r2", Status::Failed, None);
+        state.set_status("r3", Status::Completed, None);
+        state.set_status("r4", Status::Downloading, None);
+
+        state.resume_all();
+        assert_eq!(status_of(&state, "r0"), Status::Queued);
+        assert_eq!(status_of(&state, "r1"), Status::Queued);
+        assert_eq!(status_of(&state, "r2"), Status::Queued);
+        assert_eq!(status_of(&state, "r3"), Status::Completed, "a finished entry must not re-queue");
+        assert_eq!(status_of(&state, "r4"), Status::Downloading, "a running entry is untouched");
     }
 
     #[test]

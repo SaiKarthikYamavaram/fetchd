@@ -19,7 +19,8 @@ import { AddDialog } from "./components/AddDialog";
 import {
   IconArchive, IconDisc, IconDoc, IconDownload, IconFile,
   IconFolder, IconImage, IconImport, IconMusic, IconOpen, IconPause, IconPlay,
-  IconCheck, IconEdit, IconRetry, IconSelect, IconSettings, IconTrash, IconVideo,
+  IconCheck, IconEdit, IconRetry, IconSearch, IconSelect, IconSettings, IconTrash,
+  IconVideo, IconX,
 } from "./components/icons";
 import { Spinner, Dots } from "./components/Loaders";
 import "./App.css";
@@ -56,6 +57,10 @@ function App() {
   // Selection is a mode, entered from the toolbar. Outside it the list carries
   // no checkboxes at all and a row click opens its details as usual.
   const [selectMode, setSelectMode] = useState(false);
+  // Name filter. Narrows whatever the status pills already picked.
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const urlRef = useRef<HTMLInputElement>(null);
   // Set when the delete dialog is confirming the whole selection.
   const [deletingSelection, setDeletingSelection] = useState(false);
   // URL awaiting confirmation in the add dialog (location, quality, start).
@@ -141,14 +146,34 @@ function App() {
     };
   }, [refresh, scheduleRender]);
 
-  function add(e: React.FormEvent) {
+  /// A list pasted into the box is a batch, not one download: the add dialog
+  /// asks for a folder and a filename, and neither answer fits ten links. One
+  /// URL opens the dialog; several are queued straight away.
+  async function add(e: React.FormEvent) {
     e.preventDefault();
     const value = url.trim();
     if (!value) return;
     setError(null);
     setNotice(null);
-    // Confirm destination and options before anything is queued.
-    setPendingUrl(value);
+
+    const lines = value.split(/\s+/).filter(Boolean);
+    if (lines.length === 1) {
+      setPendingUrl(value);
+      return;
+    }
+
+    try {
+      const skipped = await api.importUrls(value);
+      const added = lines.length - skipped.length;
+      setUrl("");
+      setNotice(
+        skipped.length
+          ? `Added ${added} of ${lines.length}. ${skipped.length} skipped.`
+          : `Added ${added} downloads.`,
+      );
+    } catch (err) {
+      setError(String(err));
+    }
   }
 
   async function importText() {
@@ -170,14 +195,23 @@ function App() {
 
   const active = rows.filter((r) => r.status !== "completed" && r.status !== "failed");
   const done = rows.filter((r) => r.status === "completed" || r.status === "failed");
+  // Everything Resume all would act on: stopped, but not finished.
+  const stopped = rows.filter(
+    (r) => r.status === "paused" || r.status === "interrupted" || r.status === "failed",
+  );
   const downloading = active.filter((r) => r.status === "downloading");
   const totalSpeed = downloading.reduce((s, r) => s + (samples.current.get(r.id)?.speed ?? 0), 0);
 
   const visible = useMemo(() => {
-    if (filter === "active") return active;
-    if (filter === "done") return done;
-    return rows;
-  }, [filter, rows, active, done]);
+    const byStatus = filter === "active" ? active : filter === "done" ? done : rows;
+    const q = query.trim().toLowerCase();
+    if (!q) return byStatus;
+    // Match the URL too: a name that came back as "download.bin" is often only
+    // findable by where it came from.
+    return byStatus.filter(
+      (r) => r.filename.toLowerCase().includes(q) || r.url.toLowerCase().includes(q),
+    );
+  }, [filter, rows, active, done, query]);
 
   // Look these up from the current rows each render so the open modals reflect
   // live status; close automatically if the entry is gone.
@@ -214,16 +248,62 @@ function App() {
     setSelected(selection.EMPTY);
   }, []);
 
-  // Escape is the way out, but only when nothing else owns it — a modal on
-  // screen has its own Escape handler and must win.
+  const modalOpen = Boolean(detailId || deleteId || renameId || pendingUrl || deletingSelection);
+
+  // Window-level shortcuts. Nothing fires while a modal is up — each dialog
+  // owns its own keys — and the list keys stay out of the way while the caret
+  // is in a text field.
+  //
+  // Held in a ref and bound once: the handler closes over live rows, which
+  // change several times a second while downloading, and re-subscribing a
+  // window listener that often is pure waste.
+  const onKeyRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  onKeyRef.current = (e: KeyboardEvent) => {
+    if (modalOpen) return;
+    {
+      const el = e.target as HTMLElement | null;
+      const typing = el?.tagName === "INPUT" || el?.tagName === "TEXTAREA" || el?.isContentEditable;
+      const mod = e.ctrlKey || e.metaKey;
+
+      // Focus the filter. Works from anywhere, typing included.
+      if (mod && e.key === "f") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
+      }
+
+      if (e.key === "Escape") {
+        // Clear the filter first, leave the mode second: one Escape per
+        // thing to undo, in the order they were set.
+        if (typing && el === searchRef.current && query) {
+          setQuery("");
+          return;
+        }
+        if (selectMode) exitSelectMode();
+        return;
+      }
+
+      if (typing) return;
+
+      if (mod && e.key === "a" && selectMode) {
+        e.preventDefault();
+        setSelected((prev) => selection.toggleAll(prev, visible.map((r) => r.id)));
+        return;
+      }
+
+      if ((e.key === "Delete" || e.key === "Backspace") && selectMode && selectedIds.length) {
+        e.preventDefault();
+        setDeletingSelection(true);
+      }
+    }
+  };
+
   useEffect(() => {
-    if (!selectMode || detailId || deleteId || renameId || pendingUrl || deletingSelection) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") exitSelectMode();
-    };
+    const onKey = (e: KeyboardEvent) => onKeyRef.current(e);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectMode, detailId, deleteId, renameId, pendingUrl, deletingSelection, exitSelectMode]);
+  }, []);
 
   return (
     <div className="app">
@@ -260,6 +340,14 @@ function App() {
             <IconPause />
           </button>
           <button
+            className="icon-btn"
+            title="Resume all"
+            onClick={() => api.resumeAll()}
+            disabled={!stopped.length}
+          >
+            <IconPlay />
+          </button>
+          <button
             className={`icon-btn ${showSettings ? "active" : ""}`}
             title="Settings"
             onClick={() => setShowSettings((s) => !s)}
@@ -278,6 +366,7 @@ function App() {
             onChange={(e) => setUrl(e.currentTarget.value)}
             placeholder="Paste a link, or send one from the browser extension…"
             spellCheck={false}
+            ref={urlRef}
             autoFocus
           />
           <button className="add-btn" type="submit" disabled={!url.trim()}>
@@ -334,6 +423,27 @@ function App() {
                   pills it replaces — not from the toolbar, which is for actions
                   on the app rather than on the list. */}
               <div className="strip-right">
+                <label className="search" title="Filter by name or URL">
+                  <IconSearch size={14} />
+                  <input
+                    ref={searchRef}
+                    value={query}
+                    onChange={(e) => setQuery(e.currentTarget.value)}
+                    placeholder="Search"
+                    spellCheck={false}
+                    aria-label="Filter downloads"
+                  />
+                  {query && (
+                    <button
+                      type="button"
+                      className="search-clear"
+                      onClick={() => { setQuery(""); searchRef.current?.focus(); }}
+                      title="Clear filter"
+                    >
+                      <IconX size={13} />
+                    </button>
+                  )}
+                </label>
                 <button
                   className="strip-btn"
                   onClick={() => setSelectMode(true)}

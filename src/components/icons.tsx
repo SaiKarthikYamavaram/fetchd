@@ -37,6 +37,9 @@ export const IconCopy = ({ size = 16 }: P) => (
 export const IconCheck = ({ size = 16 }: P) => (
   <svg {...base(size)}><path d="M20 6 9 17l-5-5" /></svg>
 );
+export const IconSearch = ({ size = 16 }: P) => (
+  <svg {...base(size)}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+);
 export const IconSelect = ({ size = 16 }: P) => (
   <svg {...base(size)}><rect x="3" y="3" width="18" height="18" rx="3" /><path d="m8.5 12 2.5 2.5 4.5-5" /></svg>
 );

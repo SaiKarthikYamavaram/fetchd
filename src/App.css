@@ -530,6 +530,57 @@ input[type="checkbox"]:focus-visible {
 /* Everything that hangs off the right of the strip. */
 .strip-right { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 
+/* Sized to sit in the strip without competing with it: quiet at rest, and it
+   widens on focus rather than holding a wide field open all the time. */
+.search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 150px;
+  height: 30px;
+  padding: 0 6px 0 11px;
+  color: var(--faint);
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: text;
+  transition: width 0.25s var(--ease), border-color 0.2s var(--ease),
+              box-shadow 0.2s var(--ease), color 0.2s var(--ease);
+}
+.search:hover { color: var(--muted); }
+.search:focus-within {
+  width: 220px;
+  color: var(--accent-text);
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+.search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: none;
+  border: none;
+  outline: none;
+}
+.search input::placeholder { color: var(--faint); }
+.search-clear {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.search-clear:hover { color: var(--fg); background: var(--surface-3); }
+
 /* Shaped like the filter pills it sits beside, weighted like the quiet text
    buttons: an offer, not a call to action. */
 .strip-btn {

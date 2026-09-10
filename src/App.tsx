@@ -19,7 +19,7 @@ import { AddDialog } from "./components/AddDialog";
 import {
   IconArchive, IconDisc, IconDoc, IconDownload, IconFile,
   IconFolder, IconImage, IconImport, IconMusic, IconOpen, IconPause, IconPlay,
-  IconEdit, IconRetry, IconSelect, IconSettings, IconTrash, IconVideo,
+  IconCheck, IconEdit, IconRetry, IconSelect, IconSettings, IconTrash, IconVideo,
 } from "./components/icons";
 import { Spinner, Dots } from "./components/Loaders";
 import "./App.css";
@@ -462,15 +462,14 @@ function Row({
       // an indicator rather than the only thing you can hit.
       onClick={selectMode ? (e) => onSelect(e.shiftKey) : undefined}
     >
-      {selectMode && (
-        // A span, not a label: a label forwards its click to the input, which
-        // bubbles back to the row and toggles a second time. The row owns the
-        // click; this is the indicator.
-        <span className="row-check">
-          <input type="checkbox" checked={selected} readOnly tabIndex={-1} aria-hidden="true" />
+      {/* Selection has no column of its own: a picked row swaps its file-type
+          tile for a filled check, so entering the mode never re-flows the row
+          and an idle list carries no controls at all. */}
+      {selected ? (
+        <span className="type picked" role="img" aria-label="Selected">
+          <IconCheck size={22} />
         </span>
-      )}
-      {row.thumbnail ? (
+      ) : row.thumbnail ? (
         // Video preview thumbnail; overlay a small ring while downloading.
         <span className="thumb">
           <img src={row.thumbnail} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.display = "none")} />

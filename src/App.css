@@ -533,10 +533,6 @@ input[type="checkbox"]:focus-visible {
    identical cards. */
 .list > .row:nth-child(even) { background: var(--surface-glass-2); }
 
-/* Only rendered inside selection mode, so there is nothing to fade: outside it
-   the list carries no checkboxes at all. */
-.row-check { display: flex; align-items: center; }
-
 /* In the mode the whole row is the hit target, and dragging across rows must
    not start a text selection. */
 .row.picking { cursor: pointer; user-select: none; }
@@ -1006,6 +1002,16 @@ label { cursor: pointer; }
   }
   /* The lift and the shine sweep are decoration; the state change is not. */
   .add-btn::after { display: none; }
+}
+
+/* A picked row's type tile becomes the checkbox — same 40px slot, same radius,
+   so nothing moves and the accent reads as a filled box rather than a tint. */
+.type.picked {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 55%, transparent),
+              var(--inner-hl);
 }
 
 .type.downloading {

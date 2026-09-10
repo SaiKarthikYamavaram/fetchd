@@ -77,6 +77,62 @@ describe("classify", () => {
   });
 });
 
+describe("shouldTakeOver", () => {
+  const settings = {
+    enabled: true,
+    intercept: true,
+    minSizeKb: 512,
+    excludeDomains: ["intranet.test"],
+    types: { video: true, audio: true, archive: true, document: true, image: false, other: true },
+  };
+  const item = (over = {}) => ({
+    url: "https://e.test/movie.mkv",
+    finalUrl: "",
+    mime: "video/x-matroska",
+    filename: "",
+    fileSize: 900 * 1024,
+    ...over,
+  });
+
+  it("takes a matching download", () => {
+    expect(ext.shouldTakeOver(item(), settings)).toBe(true);
+  });
+
+  it("is off unless both switches are on", () => {
+    expect(ext.shouldTakeOver(item(), { ...settings, enabled: false })).toBe(false);
+    expect(ext.shouldTakeOver(item(), { ...settings, intercept: false })).toBe(false);
+    // A cold service worker has no settings yet; it must not decide blind.
+    expect(ext.shouldTakeOver(item(), null)).toBe(false);
+    expect(ext.shouldTakeOver(item(), undefined)).toBe(false);
+  });
+
+  it("prefers finalUrl, since that is what actually gets fetched", () => {
+    const redirected = item({ finalUrl: "https://cdn.test/movie.mkv" });
+    expect(ext.shouldTakeOver(redirected, settings)).toBe(true);
+    // The exclusion applies to where it ended up, not where it started.
+    expect(
+      ext.shouldTakeOver(item({ finalUrl: "https://intranet.test/movie.mkv" }), settings),
+    ).toBe(false);
+  });
+
+  it("leaves alone what the settings say to leave alone", () => {
+    expect(ext.shouldTakeOver(item({ url: "https://intranet.test/movie.mkv", finalUrl: "" }), settings)).toBe(false);
+    // Images are off in these settings.
+    expect(ext.shouldTakeOver(item({ mime: "image/png", url: "https://e.test/a.png" }), settings)).toBe(false);
+    // Nothing a download manager should be taking.
+    expect(ext.shouldTakeOver(item({ mime: "text/html", url: "https://e.test/page.html" }), settings)).toBe(false);
+    // Not http(s).
+    expect(ext.shouldTakeOver(item({ url: "blob:https://e.test/abc", finalUrl: "" }), settings)).toBe(false);
+  });
+
+  it("skips a file that is known to be small, but not one of unknown size", () => {
+    expect(ext.shouldTakeOver(item({ fileSize: 10 * 1024 }), settings)).toBe(false);
+    // Chrome reports -1 or 0 until it knows; those must not be filtered out.
+    expect(ext.shouldTakeOver(item({ fileSize: -1 }), settings)).toBe(true);
+    expect(ext.shouldTakeOver(item({ fileSize: 0 }), settings)).toBe(true);
+  });
+});
+
 describe("isStreamManifest", () => {
   it("matches a manifest with a query or fragment after it", () => {
     expect(ext.isStreamManifest("https://e.test/live.m3u8")).toBe(true);

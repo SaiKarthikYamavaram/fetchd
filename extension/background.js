@@ -234,46 +234,67 @@ async function grabFromPage(tab, mode, referer) {
 // Intercept the browser's own downloads (opt-in).
 // ---------------------------------------------------------------------------
 
-chrome.downloads.onCreated.addListener(async (item) => {
-  const settings = await getSettings();
-  if (!settings.enabled || !settings.intercept) return;
+// Settings, cached synchronously.
+//
+// The interception below cannot afford an `await` before it cancels, and
+// reading storage is one. Kept fresh from the change event.
+let cachedSettings = null;
+const refreshSettings = () => getSettings().then((s) => (cachedSettings = s));
+refreshSettings();
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.settings) refreshSettings();
+});
 
-  const url = item.finalUrl || item.url;
-  if (!url || !/^https?:/i.test(url)) return;
-  if (isExcluded(url, settings)) return;
-
-  const type = classify(item.mime, item.filename || filenameFromUrl(url));
-  if (!type || !settings.types[type]) return;
-  if (item.fileSize > 0 && item.fileSize < settings.minSizeKb * 1024) return;
-
-  // Check the app is reachable BEFORE cancelling. Cancelling first and then
-  // failing to hand over would destroy the download with nothing taking it up.
-  if (!(await fetchdAlive())) {
-    notify("fetchd not running", "Left this download to the browser.");
+chrome.downloads.onCreated.addListener((item) => {
+  if (cachedSettings) {
+    if (shouldTakeOver(item, cachedSettings)) takeOver(item);
     return;
   }
+  // Cold service worker: read storage, and accept that this one download may
+  // lose the race. Every later one is decided synchronously.
+  refreshSettings().then((s) => {
+    if (shouldTakeOver(item, s)) takeOver(item);
+  });
+});
+
+/// Cancel first, ask questions after.
+///
+/// The old order checked that fetchd was reachable before cancelling, which
+/// meant a round trip to 127.0.0.1 while the browser was already prompting for
+/// a location and pulling bytes — so the download happened twice. Cancelling
+/// is the first thing now, and the restore path below is what makes that safe:
+/// if the handover fails for any reason, the browser gets the download back.
+async function takeOver(item) {
+  const url = item.finalUrl || item.url;
 
   try {
     await chrome.downloads.cancel(item.id);
+  } catch {
+    return; // already finished or uncancellable — do not double-download
+  }
+  // Erasing is cosmetic (it clears the cancelled row from the downloads page)
+  // and must never abort the handover.
+  try {
     await chrome.downloads.erase({ id: item.id });
   } catch {
-    return; // already finished / uncancellable — don't double-download
+    /* ignore */
   }
 
   const referer = item.referrer || url;
-  if (!(await sendToFetchd(url, referer))) {
-    // Handover failed after the browser download was cancelled; give it back
-    // rather than silently losing the file.
-    try {
-      await chrome.downloads.download({ url });
-      notify("fetchd did not accept it", "Restored the browser download.");
-    } catch {
-      notify("Download lost", "fetchd rejected it and the browser could not resume it.");
-    }
+  if (await sendToFetchd(url, referer)) {
+    notify("Sent to fetchd", filenameFromUrl(url));
     return;
   }
-  notify("Sent to fetchd", filenameFromUrl(url));
-});
+
+  // Handover failed — fetchd is not running, or refused it. Give the download
+  // back rather than silently losing it.
+  try {
+    await chrome.downloads.download({ url });
+    notify("fetchd did not take it", "Restored the browser download.");
+  } catch {
+    notify("Download lost", "fetchd rejected it and the browser could not restart it.");
+  }
+}
 
 // Keyboard shortcut: grab the current page's video without reaching for a menu.
 chrome.commands?.onCommand.addListener(async (command) => {

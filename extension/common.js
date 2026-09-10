@@ -107,6 +107,29 @@ function filenameFromUrl(url) {
   } catch { return url; }
 }
 
+// Whether an intercepted browser download is one fetchd should take over.
+//
+// Pure and synchronous on purpose: `downloads.onCreated` is a race — Chrome
+// does not wait for an async listener, so anything awaited before the cancel
+// is time the browser spends putting up its own Save-As dialog and starting
+// the transfer. The caller holds the settings; this only decides.
+function shouldTakeOver(item, settings) {
+  if (!settings || !settings.enabled || !settings.intercept) return false;
+
+  const url = item.finalUrl || item.url;
+  if (!url || !/^https?:/i.test(url)) return false;
+  if (isExcluded(url, settings)) return false;
+
+  const type = classify(item.mime, item.filename || filenameFromUrl(url));
+  if (!type || !settings.types[type]) return false;
+
+  // fileSize is often -1 or 0 at this point; only a known, genuinely small
+  // file is skipped.
+  if (item.fileSize > 0 && item.fileSize < settings.minSizeKb * 1024) return false;
+
+  return true;
+}
+
 async function cookieHeaderFor(url) {
   try {
     const cookies = await chrome.cookies.getAll({ url });

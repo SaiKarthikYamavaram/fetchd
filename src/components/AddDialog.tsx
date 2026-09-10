@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
+import { Download, Folder } from "lucide-react";
 import { api, type AddOptions } from "../lib/api";
-import { IconFolder, IconDownload, IconX } from "./icons";
-import { useEscape } from "../lib/useEscape";
+import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Textarea } from "./ui/textarea";
 
 /// Hosts spool routes to yt-dlp. Kept in sync with VIDEO_HOSTS in
 /// src-tauri/src/ytdlp.rs — used only to decide whether to offer the quality
@@ -97,12 +103,6 @@ export function AddDialog({
   // Either route lands on yt-dlp, which is what the quality picker drives.
   const video = isVideoUrl(one) || isStreamManifest(one);
 
-  // Escape must go through dismiss so a parked extension request is released.
-  useEscape(() => {
-    if (token) api.cancelPending(token).catch(() => {});
-    onClose();
-  });
-
   useEffect(() => {
     // Show the real default folder rather than a vague placeholder.
     api.getDownloadDir().then(setDir).catch(() => setDir(""));
@@ -173,120 +173,119 @@ export function AddDialog({
   }
 
   return (
-    <div className="overlay" onClick={dismiss}>
-      <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
-        <div className="modal-head">
-          <h2 className="modal-title">{multi ? "Import links" : "Add download"}</h2>
-          <button type="button" className="act" onClick={dismiss} title="Close">
-            <IconX />
-          </button>
-        </div>
+    <Dialog open onOpenChange={(open) => !open && dismiss()}>
+      <DialogContent className="sm:max-w-lg">
+        <form onSubmit={submit} className="space-y-4">
+          <DialogHeader>
+            <DialogTitle>{multi ? "Import links" : "Add download"}</DialogTitle>
+          </DialogHeader>
 
-        <label className="field">
-          <span>
-            {links.length > 1 ? `${links.length} links` : multi ? "Links" : "URL"}
-          </span>
-          {asList ? (
-            <textarea
-              className="urls"
-              value={value}
-              onChange={(e) => setValue(e.currentTarget.value)}
-              readOnly={locked}
-              placeholder={"https://example.com/one.zip\nhttps://example.com/two.zip\n\n# lines starting with # are skipped"}
-              spellCheck={false}
-              rows={5}
-              autoFocus={!locked}
-            />
-          ) : (
-            <input
-              value={value}
-              onChange={(e) => setValue(e.currentTarget.value)}
-              readOnly={locked}
-              placeholder="https://…  — or paste several at once"
-              spellCheck={false}
-              autoFocus={!locked}
-            />
-          )}
-        </label>
-
-        <label className="field">
-          <span>Save to</span>
-          <div className="field-inline">
-            <input
-              value={dir}
-              onChange={(e) => setDir(e.currentTarget.value)}
-              placeholder="Download folder"
-              spellCheck={false}
-            />
-            <button type="button" className="btn" onClick={browse}>
-              <IconFolder /> Browse
-            </button>
+          <div className="space-y-1.5">
+            <Label>{links.length > 1 ? `${links.length} links` : multi ? "Links" : "URL"}</Label>
+            {asList ? (
+              <Textarea
+                value={value}
+                onChange={(e) => setValue(e.currentTarget.value)}
+                readOnly={locked}
+                placeholder={"https://example.com/one.zip\nhttps://example.com/two.zip\n\n# lines starting with # are skipped"}
+                spellCheck={false}
+                rows={5}
+                autoFocus={!locked}
+              />
+            ) : (
+              <Input
+                value={value}
+                onChange={(e) => setValue(e.currentTarget.value)}
+                readOnly={locked}
+                placeholder="https://…  — or paste several at once"
+                spellCheck={false}
+                autoFocus={!locked}
+              />
+            )}
           </div>
-        </label>
 
-        <label className="field">
-          <span>Save as</span>
-          <input
-            value={asList ? "" : name}
-            onChange={(e) => setName(e.currentTarget.value)}
-            // A video URL's last path segment is routing ("watch", "video"),
-            // never a filename — yt-dlp names it from the title instead.
-            placeholder={
-              asList
-                ? "One name cannot cover several links"
-                : (video ? "" : suggestedName(one)) || "Automatic"
-            }
-            spellCheck={false}
-            disabled={asList}
-          />
-        </label>
-        <p className="help">
-          {asList
-            ? "Every link goes to the folder above and keeps the name its server gives it."
-            : video
-              ? "Leave blank to use the video's title. The container is picked by yt-dlp."
-              : "Leave blank to use the server's name. Without an extension, the source's is kept."}
-        </p>
+          <div className="space-y-1.5">
+            <Label>Save to</Label>
+            <div className="flex gap-2">
+              <Input
+                value={dir}
+                onChange={(e) => setDir(e.currentTarget.value)}
+                placeholder="Download folder"
+                spellCheck={false}
+              />
+              <Button type="button" variant="outline" onClick={browse}>
+                <Folder /> Browse
+              </Button>
+            </div>
+          </div>
 
-        {video && (
-          <label className="field">
-            <span>Video quality</span>
-            <select value={quality} onChange={(e) => setQuality(e.currentTarget.value)}>
-              <option value="">Use setting</option>
-              <option value="best">Best available</option>
-              <option value="2160">2160p (4K)</option>
-              <option value="1440">1440p</option>
-              <option value="1080">1080p</option>
-              <option value="720">720p</option>
-              <option value="480">480p</option>
-              <option value="audio">Audio only (mp3)</option>
-            </select>
-          </label>
-        )}
+          <div className="space-y-1.5">
+            <Label>Save as</Label>
+            <Input
+              value={asList ? "" : name}
+              onChange={(e) => setName(e.currentTarget.value)}
+              // A video URL's last path segment is routing ("watch", "video"),
+              // never a filename — yt-dlp names it from the title instead.
+              placeholder={
+                asList
+                  ? "One name cannot cover several links"
+                  : (video ? "" : suggestedName(one)) || "Automatic"
+              }
+              spellCheck={false}
+              disabled={asList}
+            />
+            <p className="text-sm text-muted-foreground">
+              {asList
+                ? "Every link goes to the folder above and keeps the name its server gives it."
+                : video
+                  ? "Leave blank to use the video's title. The container is picked by yt-dlp."
+                  : "Leave blank to use the server's name. Without an extension, the source's is kept."}
+            </p>
+          </div>
 
-        <label className="check">
-          <input type="checkbox" checked={start} onChange={(e) => setStart(e.currentTarget.checked)} />
-          <span>Start now (uncheck to add it paused)</span>
-        </label>
+          {video && (
+            <div className="space-y-1.5">
+              <Label>Video quality</Label>
+              <Select value={quality || "setting"} onValueChange={(v) => setQuality(v === "setting" ? "" : v)}>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="setting">Use setting</SelectItem>
+                  <SelectItem value="best">Best available</SelectItem>
+                  <SelectItem value="2160">2160p (4K)</SelectItem>
+                  <SelectItem value="1440">1440p</SelectItem>
+                  <SelectItem value="1080">1080p</SelectItem>
+                  <SelectItem value="720">720p</SelectItem>
+                  <SelectItem value="480">480p</SelectItem>
+                  <SelectItem value="audio">Audio only (mp3)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
-        {error && <p className="err inline">{error}</p>}
+          <Label className="flex items-center gap-2 font-normal">
+            <Checkbox checked={start} onCheckedChange={(v) => setStart(v === true)} />
+            Start now (uncheck to add it paused)
+          </Label>
 
-        <div className="modal-actions">
-          <button type="submit" className="btn primary" disabled={busy || links.length === 0}>
-            <IconDownload />{" "}
-            {busy
-              ? "Adding…"
-              : batch
-                ? `Download ${links.length}`
-                : multi
-                  ? "Import"
-                  : start
-                    ? "Download"
-                    : "Add paused"}
-          </button>
-          <button type="button" className="btn" onClick={dismiss}>Cancel</button>
-        </div>
-      </form>
-    </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={dismiss}>Cancel</Button>
+            <Button type="submit" disabled={busy || links.length === 0}>
+              <Download />{" "}
+              {busy
+                ? "Adding…"
+                : batch
+                  ? `Download ${links.length}`
+                  : multi
+                    ? "Import"
+                    : start
+                      ? "Download"
+                      : "Add paused"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

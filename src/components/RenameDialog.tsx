@@ -1,7 +1,10 @@
 import { useState } from "react";
+import { Pencil } from "lucide-react";
 import { api, type DownloadView } from "../lib/api";
-import { IconEdit, IconX } from "./icons";
-import { useEscape } from "../lib/useEscape";
+import { Button } from "./ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
 
 /// Rename a download already in the list. The file on disk moves with it —
 /// the finished file for a completed entry, the `.part` for an unfinished one.
@@ -15,8 +18,6 @@ export function RenameDialog({
   const [name, setName] = useState(row.filename);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEscape(onClose);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -38,39 +39,39 @@ export function RenameDialog({
   }
 
   return (
-    <div className="overlay" onClick={onClose}>
-      <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
-        <div className="modal-head">
-          <h2 className="modal-title">Rename</h2>
-          <button type="button" className="act" onClick={onClose} title="Close">
-            <IconX />
-          </button>
-        </div>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>Rename</DialogTitle>
+          </DialogHeader>
 
-        <label className="field">
-          <span>Filename</span>
-          <input
-            value={name}
-            onChange={(e) => setName(e.currentTarget.value)}
-            spellCheck={false}
-            autoFocus
-          />
-        </label>
-        <p className="help">
-          {row.status === "completed"
-            ? "The finished file is renamed on disk."
-            : "The partial file is renamed too, so the download still resumes."}
-        </p>
+          <div className="space-y-1.5 py-4">
+            <Label htmlFor="rename-name">Filename</Label>
+            <Input
+              id="rename-name"
+              value={name}
+              onChange={(e) => setName(e.currentTarget.value)}
+              spellCheck={false}
+              autoFocus
+            />
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {row.status === "completed"
+              ? "The finished file is renamed on disk."
+              : "The partial file is renamed too, so the download still resumes."}
+          </p>
 
-        {error && <p className="err inline">{error}</p>}
+          {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
 
-        <div className="modal-actions">
-          <button type="submit" className="btn primary" disabled={busy}>
-            <IconEdit /> {busy ? "Renaming…" : "Rename"}
-          </button>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-        </div>
-      </form>
-    </div>
+          <DialogFooter className="mt-4">
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={busy}>
+              <Pencil /> {busy ? "Renaming…" : "Rename"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

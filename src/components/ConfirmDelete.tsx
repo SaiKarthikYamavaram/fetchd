@@ -1,6 +1,10 @@
+import { Trash2 } from "lucide-react";
 import { api, type DownloadView } from "../lib/api";
-import { IconTrash } from "./icons";
-import { useEscape } from "../lib/useEscape";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "./ui/alert-dialog";
+import { buttonVariants } from "./ui/button";
 
 /// Removing an entry has two distinct meanings, so ask which. "Remove from
 /// list" keeps the downloaded file; "Delete file too" erases it from disk.
@@ -16,8 +20,6 @@ export function ConfirmDelete({
   rows: DownloadView[];
   onClose: () => void;
 }) {
-  useEscape(onClose);
-
   const many = rows.length > 1;
   // With a mixed selection the cautious wording wins: say "partial" unless
   // every entry is finished.
@@ -34,29 +36,32 @@ export function ConfirmDelete({
   }
 
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal confirm" onClick={(e) => e.stopPropagation()}>
-        <div className="confirm-icon"><IconTrash size={22} /></div>
-        <h2 className="confirm-title">
-          {many ? `Remove ${rows.length} downloads?` : `Remove “${rows[0].filename}”?`}
-        </h2>
-        <p className="confirm-sub">
-          {finished
-            ? many
-              ? "Keep the downloaded files, or delete them from disk as well."
-              : "Keep the downloaded file, or delete it from disk as well."
-            : many
-              ? "This cancels any that are unfinished. Their partial files can be kept or deleted."
-              : "This cancels the download. The partial file can be kept or deleted."}
-        </p>
-        <div className="confirm-actions">
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn" onClick={removeOnly}>Remove from list</button>
-          <button className="btn danger" onClick={deleteFile}>
-            <IconTrash size={15} /> {many ? "Delete files" : "Delete file"}
-          </button>
-        </div>
-      </div>
-    </div>
+    <AlertDialog open onOpenChange={(open) => !open && onClose()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>
+            {many ? `Remove ${rows.length} downloads?` : `Remove "${rows[0].filename}"?`}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {finished
+              ? many
+                ? "Keep the downloaded files, or delete them from disk as well."
+                : "Keep the downloaded file, or delete it from disk as well."
+              : many
+                ? "This cancels any that are unfinished. Their partial files can be kept or deleted."
+                : "This cancels the download. The partial file can be kept or deleted."}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction className={buttonVariants({ variant: "outline" })} onClick={removeOnly}>
+            Remove from list
+          </AlertDialogAction>
+          <AlertDialogAction className={buttonVariants({ variant: "destructive" })} onClick={deleteFile}>
+            <Trash2 /> {many ? "Delete files" : "Delete file"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

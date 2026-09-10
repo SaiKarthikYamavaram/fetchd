@@ -1,6 +1,8 @@
+import { Copy, ExternalLink, Folder } from "lucide-react";
 import { api, formatBytes, formatDate, type DownloadView } from "../lib/api";
-import { IconOpen, IconFolder, IconCopy, IconX } from "./icons";
-import { useEscape } from "../lib/useEscape";
+import { Button } from "./ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
+import { Progress } from "./ui/progress";
 
 /// Full detail for one download — the "properties" screen. Live progress is
 /// merged in from the parent so per-segment bars move while it runs.
@@ -17,48 +19,39 @@ export function DetailModal({
   speed: number;
   onClose: () => void;
 }) {
-  useEscape(onClose);
-
   const downloaded =
     row.status === "downloading" && liveBytes !== undefined ? liveBytes : row.downloaded;
   const total = row.total ?? liveTotal ?? null;
   const percent = total ? Math.min(100, (downloaded / total) * 100) : null;
-  // Slide only when bytes move with an unknown size; a still-resolving
-  // download shows an empty bar instead of fake motion.
-  const indeterminate = percent === null && downloaded > 0;
 
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <h2 className="modal-title" title={row.filename}>{row.filename}</h2>
-          <button className="act" onClick={onClose} title="Close"><IconX /></button>
-        </div>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="truncate" title={row.filename}>{row.filename}</DialogTitle>
+        </DialogHeader>
 
         {row.thumbnail && (
           <img
-            className="modal-thumb"
+            className="max-h-48 w-full rounded-md object-cover"
             src={row.thumbnail}
             alt=""
             onError={(e) => (e.currentTarget.style.display = "none")}
           />
         )}
 
-        <div className="modal-progress">
-          <div className={`track ${indeterminate ? "indeterminate" : ""}`}>
-            <div
-              className="track-fill"
-              style={{ width: indeterminate ? "40%" : `${percent ?? 0}%` }}
-            />
-          </div>
-          <div className="modal-progress-meta">
+        <div className="space-y-1.5">
+          <Progress value={percent ?? (downloaded > 0 ? 15 : 0)} />
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span>{formatBytes(downloaded)}{total ? ` / ${formatBytes(total)}` : ""}</span>
-            <span>{percent !== null ? `${percent.toFixed(1)}%` : "size unknown"}</span>
-            {row.status === "downloading" && <span className="rate-tag">{formatBytes(speed)}/s</span>}
+            <span className="flex items-center gap-2">
+              {percent !== null ? `${percent.toFixed(1)}%` : "size unknown"}
+              {row.status === "downloading" && <span>{formatBytes(speed)}/s</span>}
+            </span>
           </div>
         </div>
 
-        <dl className="detail">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
           <Field label="Status" value={cap(row.status)} />
           <Field label="Saved to" value={row.path} mono copyable />
           <Field label="Source URL" value={row.url} mono copyable />
@@ -89,17 +82,17 @@ export function DetailModal({
         </dl>
 
         {row.ranges.length > 1 && (
-          <div className="segments">
-            <h3>Segments</h3>
-            <div className="seg-grid">
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">Segments</h3>
+            <div className="grid grid-cols-2 gap-2">
               {row.ranges.map(([start, end], i) => {
                 const size = end - start + 1;
                 const got = row.done[i] ?? 0;
                 const pct = size > 0 ? Math.min(100, (got / size) * 100) : 100;
                 return (
-                  <div className="seg" key={i}>
-                    <div className="seg-bar"><div style={{ width: `${pct}%` }} /></div>
-                    <span className="seg-label">
+                  <div className="space-y-1" key={i}>
+                    <Progress value={pct} className="h-1.5" />
+                    <span className="text-xs text-muted-foreground">
                       #{i + 1} · {formatBytes(got)}/{formatBytes(size)}
                     </span>
                   </div>
@@ -109,23 +102,23 @@ export function DetailModal({
           </div>
         )}
 
-        <div className="modal-actions">
+        <div className="flex flex-wrap gap-2">
           {row.status === "completed" && (
             <>
-              <button className="btn primary" onClick={() => api.openFile(row.path)}>
-                <IconOpen /> Open file
-              </button>
-              <button className="btn" onClick={() => api.revealFile(row.path)}>
-                <IconFolder /> Open folder
-              </button>
+              <Button onClick={() => api.openFile(row.path)}>
+                <ExternalLink /> Open file
+              </Button>
+              <Button variant="outline" onClick={() => api.revealFile(row.path)}>
+                <Folder /> Open folder
+              </Button>
             </>
           )}
-          <button className="btn" onClick={() => navigator.clipboard.writeText(row.url)}>
-            <IconCopy /> Copy URL
-          </button>
+          <Button variant="outline" onClick={() => navigator.clipboard.writeText(row.url)}>
+            <Copy /> Copy URL
+          </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -134,17 +127,18 @@ function Field({
 }: { label: string; value: string; mono?: boolean; copyable?: boolean; error?: boolean }) {
   return (
     <>
-      <dt>{label}</dt>
-      <dd className={`${mono ? "mono" : ""} ${error ? "err-text" : ""}`}>
-        <span className="dd-value">{value}</span>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={`flex items-center gap-1.5 truncate ${mono ? "font-mono" : ""} ${error ? "text-destructive" : ""}`}>
+        <span className="truncate" title={value}>{value}</span>
         {copyable && (
-          <button
-            className="dd-copy act"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             title="Copy"
             onClick={() => navigator.clipboard.writeText(value)}
           >
-            <IconCopy size={14} />
-          </button>
+            <Copy />
+          </Button>
         )}
       </dd>
     </>

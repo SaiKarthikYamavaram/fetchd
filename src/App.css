@@ -404,12 +404,37 @@ body { margin: 0; background: var(--bg); color: var(--fg); }
 .add-btn:disabled { opacity: 0.4; cursor: default; box-shadow: none; }
 
 .toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   margin-bottom: 12px;
-  padding: 11px 14px;
+  padding: 11px 10px 11px 14px;
   font-size: 13px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
+  animation: toast-in 0.3s var(--ease);
 }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+.toast-text { flex: 1; min-width: 0; }
+.toast-close {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: inherit;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity 0.2s var(--ease), background 0.2s var(--ease);
+}
+.toast-close:hover { opacity: 1; background: color-mix(in srgb, currentColor 14%, transparent); }
 .toast.notice { color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
 .toast.err { color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); border-color: color-mix(in srgb, var(--err) 30%, transparent); word-break: break-word; }
 
@@ -646,6 +671,11 @@ input[type="checkbox"]:focus-visible {
 .row:hover {
   border-color: var(--border-strong);
   box-shadow: var(--shadow-md);
+}
+.row-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius-sm);
 }
 .row.selected:hover {
   box-shadow: var(--shadow-md), inset 3px 0 0 0 var(--accent),
@@ -1087,6 +1117,7 @@ label { cursor: pointer; }
   }
   /* The lift and the shine sweep are decoration; the state change is not. */
   .add-btn::after { display: none; }
+  .toast { animation: none; }
 }
 
 /* A picked row's type tile becomes the checkbox — same 40px slot, same radius,

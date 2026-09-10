@@ -56,6 +56,10 @@ function App() {
   // Selection is a mode, entered from the toolbar. Outside it the list carries
   // no checkboxes at all and a row click opens its details as usual.
   const [selectMode, setSelectMode] = useState(false);
+  /// Every command below is fire-and-forget from a click handler, so a
+  /// rejection has nowhere to go but an unhandled promise. Route them through
+  /// here and the failure reaches the user instead of the console.
+  const report = useCallback((e: unknown) => setError(String(e)), []);
   // Name filter. Narrows whatever the status pills already picked.
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -292,7 +296,7 @@ function App() {
           <button
             className="icon-btn"
             title="Pause all"
-            onClick={() => api.pauseAll()}
+            onClick={() => api.pauseAll().catch(report)}
             disabled={!active.length}
           >
             <IconPause />
@@ -300,7 +304,7 @@ function App() {
           <button
             className="icon-btn"
             title="Resume all"
-            onClick={() => api.resumeAll()}
+            onClick={() => api.resumeAll().catch(report)}
             disabled={!stopped.length}
           >
             <IconPlay />
@@ -364,8 +368,10 @@ function App() {
           </button>
         </div>
 
-        {notice && <div className="toast notice">{notice}</div>}
-        {error && <div className="toast err">{error}</div>}
+        {/* Both clear themselves; an error lingers longer because it may need
+            reading twice, and either can be dismissed outright. */}
+        <Toast kind="notice" message={notice} onClose={() => setNotice(null)} after={4000} />
+        <Toast kind="err" message={error} onClose={() => setError(null)} after={9000} />
 
         <div className="filters">
           {/* The selection controls take over this strip rather than opening a
@@ -387,10 +393,10 @@ function App() {
                 />
               </label>
               <span className="selcount">{selectedRows.length} selected</span>
-              <button className="btn sel-act" onClick={() => api.bulk(selectedIds, "pause")} disabled={!canPause}>
+              <button className="btn sel-act" onClick={() => api.bulk(selectedIds, "pause").catch(report)} disabled={!canPause}>
                 <IconPause /> Pause
               </button>
-              <button className="btn sel-act" onClick={() => api.bulk(selectedIds, "resume")} disabled={!canResume}>
+              <button className="btn sel-act" onClick={() => api.bulk(selectedIds, "resume").catch(report)} disabled={!canResume}>
                 <IconPlay /> Resume
               </button>
               <button
@@ -422,7 +428,7 @@ function App() {
                   <IconSelect size={15} /> Select
                 </button>
                 {done.length > 0 && (
-                  <button className="clear" onClick={() => api.clearHistory()}>Clear finished</button>
+                  <button className="clear" onClick={() => api.clearHistory().catch(report)}>Clear finished</button>
                 )}
               </div>
             </>
@@ -440,6 +446,7 @@ function App() {
               onOpen={() => setDetailId(row.id)}
               onDelete={() => setDeleteId(row.id)}
               onRename={() => setRenameId(row.id)}
+              onFail={report}
               selectMode={selectMode}
               selected={selected.ids.has(row.id)}
               onSelect={(extend) => toggleRow(row.id, extend)}
@@ -448,10 +455,24 @@ function App() {
           {visible.length === 0 && (
             <div className="empty">
               <span className="empty-glyph"><IconDownload size={30} /></span>
-              <p className="empty-title">No downloads {filter !== "all" ? "here" : "yet"}</p>
+              <p className="empty-title">
+                {query
+                  ? "Nothing matches that"
+                  : `No downloads ${filter !== "all" ? "here" : "yet"}`}
+              </p>
               <p className="empty-sub">
-                Paste a link above, or right-click any link in your browser and choose
-                <strong> Download with fetchd</strong>.
+                {query ? (
+                  <>
+                    No download matches <strong>{query}</strong>. Clear the filter, or try
+                    part of a URL.
+                  </>
+                ) : (
+                  <>
+                    Hit <strong>Add</strong> to paste a link, <strong>Import</strong> for a
+                    list of them, or right-click any link in your browser and choose{" "}
+                    <strong>Download with fetchd</strong>.
+                  </>
+                )}
               </p>
             </div>
           )}
@@ -511,9 +532,41 @@ function FilterPill({
   );
 }
 
+/// A self-clearing banner. Mounted always so the timer belongs to one place;
+/// it renders nothing without a message.
+function Toast({
+  kind,
+  message,
+  onClose,
+  after,
+}: {
+  kind: "notice" | "err";
+  message: string | null;
+  onClose: () => void;
+  after: number;
+}) {
+  useEffect(() => {
+    if (!message) return;
+    // Keyed on the message, so a second identical-looking one restarts the
+    // clock rather than inheriting the first one's remaining time.
+    const t = window.setTimeout(onClose, after);
+    return () => window.clearTimeout(t);
+  }, [message, after, onClose]);
+
+  if (!message) return null;
+  return (
+    <div className={`toast ${kind}`} role={kind === "err" ? "alert" : "status"}>
+      <span className="toast-text">{message}</span>
+      <button className="toast-close" onClick={onClose} title="Dismiss">
+        <IconX size={14} />
+      </button>
+    </div>
+  );
+}
+
 function Row({
   row, liveBytes, liveTotal, speed, onOpen, onDelete, onRename,
-  selectMode, selected, onSelect,
+  selectMode, selected, onSelect, onFail,
 }: {
   row: DownloadView;
   liveBytes?: number;
@@ -525,6 +578,8 @@ function Row({
   selectMode: boolean;
   selected: boolean;
   onSelect: (extend: boolean) => void;
+  /// Surfaces a failed command; a click handler has nowhere else to put one.
+  onFail: (e: unknown) => void;
 }) {
   const downloaded = row.status === "downloading" && liveBytes !== undefined ? liveBytes : row.downloaded;
   // yt-dlp size is only known once running, so fall back to the live total.
@@ -574,10 +629,25 @@ function Row({
         <span className={`type ${kind.cls}`}>{kind.icon}</span>
       )}
 
+      {/* A div with a click handler is invisible to the keyboard, so this
+          carries the button role, a tab stop and the keys that go with it.
+          In selection mode the row itself owns the click and this is inert. */}
       <div
         className={`row-main${selectMode ? "" : " clickable"}`}
         onClick={selectMode ? undefined : onOpen}
         title={selectMode ? undefined : "View details"}
+        role={selectMode ? undefined : "button"}
+        tabIndex={selectMode ? undefined : 0}
+        onKeyDown={
+          selectMode
+            ? undefined
+            : (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onOpen();
+                }
+              }
+        }
       >
         <div className="row-top">
           <span className="fname" title={row.url}>{row.filename}</span>
@@ -622,18 +692,18 @@ function Row({
           mode; each button already handles its own click. */}
       <div className="row-actions" onClick={(e) => e.stopPropagation()}>
         {(row.status === "downloading" || row.status === "queued") && (
-          <button className="act primary-act" title="Pause" onClick={() => api.pause(row.id)}><IconPause /></button>
+          <button className="act primary-act" title="Pause" onClick={() => api.pause(row.id).catch(onFail)}><IconPause /></button>
         )}
         {(row.status === "paused" || row.status === "interrupted") && (
-          <button className="act primary-act" title="Resume" onClick={() => api.resume(row.id)}><IconPlay /></button>
+          <button className="act primary-act" title="Resume" onClick={() => api.resume(row.id).catch(onFail)}><IconPlay /></button>
         )}
         {row.status === "failed" && (
-          <button className="act primary-act" title="Retry" onClick={() => api.retry(row.id)}><IconRetry /></button>
+          <button className="act primary-act" title="Retry" onClick={() => api.retry(row.id).catch(onFail)}><IconRetry /></button>
         )}
         {row.status === "completed" && (
           <>
-            <button className="act accent primary-act" title="Open file" onClick={() => api.openFile(row.path)}><IconOpen /></button>
-            <button className="act" title="Open folder" onClick={() => api.revealFile(row.path)}><IconFolder /></button>
+            <button className="act accent primary-act" title="Open file" onClick={() => api.openFile(row.path).catch(onFail)}><IconOpen /></button>
+            <button className="act" title="Open folder" onClick={() => api.revealFile(row.path).catch(onFail)}><IconFolder /></button>
           </>
         )}
         <span className="act-sep" />

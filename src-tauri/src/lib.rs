@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, State, WindowEvent,
 };
@@ -205,6 +205,10 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main(app);
         }))
+        // Remembers the window's size and position across launches. Without
+        // it every launch reopens at the configured default, which is smaller
+        // than the add dialog needs.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -219,10 +223,18 @@ pub fn run() {
             // System tray: left-click restores the window; the menu offers an
             // explicit Show and a real Quit (the window's close button only
             // hides to tray, so Quit is the one way to actually exit).
+            //
+            // Pause all and Resume all are here too: the app spends most of a
+            // long download minimised, and reaching for the queue's brakes
+            // should not mean raising the window first.
             let show = MenuItem::with_id(app, "show", "Show fetchd", true, None::<&str>)?;
+            let pause = MenuItem::with_id(app, "pause_all", "Pause all", true, None::<&str>)?;
+            let resume = MenuItem::with_id(app, "resume_all", "Resume all", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let sep = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(app, &[&show, &sep, &pause, &resume, &sep, &quit])?;
 
+            let tray_state = Arc::clone(&state);
             let quit_state = Arc::clone(&state);
             TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
@@ -231,6 +243,14 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "show" => show_main(app),
+                    "pause_all" => {
+                        tray_state.pause_all();
+                        state::emit_queue(app, &tray_state);
+                    }
+                    "resume_all" => {
+                        tray_state.resume_all();
+                        state::pump(app, &tray_state);
+                    }
                     "quit" => {
                         quit_state.shutdown();
                         app.exit(0);

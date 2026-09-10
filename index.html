@@ -15,22 +15,29 @@
       (function () {
         try {
           const t = localStorage.getItem("spool_theme");
-          if (t === "light") {
-            document.documentElement.dataset.theme = "light";
-          } else {
-            document.documentElement.dataset.theme = "dark";
+          if (t === "light" || t === "dark") {
+            document.documentElement.dataset.theme = t;
           }
+          // "system" (the default) or nothing stored: leave the attribute
+          // unset, same as applyTheme() does, so the prefers-color-scheme
+          // rule below decides — matching dark-OS assumed otherwise would
+          // flash dark at every light-OS user on default settings.
         } catch (e) {
-          document.documentElement.dataset.theme = "dark";
+          // No-op: the unstyled fallback is the light background below.
         }
       })();
     </script>
     <style>
       :root {
-        --loader-bg: #09090b;
-      }
-      :root[data-theme="light"] {
         --loader-bg: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --loader-bg: #09090b;
+        }
+      }
+      :root[data-theme="dark"] {
+        --loader-bg: #09090b;
       }
       html, body {
         margin: 0;

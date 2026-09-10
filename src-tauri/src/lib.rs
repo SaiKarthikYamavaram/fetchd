@@ -380,8 +380,18 @@ pub fn run() {
         }))
         // Remembers the window's size and position across launches. Without
         // it every launch reopens at the configured default, which is smaller
-        // than the add dialog needs.
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // than the add dialog needs. Decorations are excluded: they're a
+        // build-time choice (see tauri.conf.json), not a per-session one, and
+        // restoring a stale `decorated: true` from before the custom
+        // titlebar existed would resurrect the native chrome.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        - tauri_plugin_window_state::StateFlags::DECORATIONS,
+                )
+                .build(),
+        )
         // `--hidden` is what the autostart entry passes, so a login launch can
         // go straight to the tray while a launcher launch shows itself.
         .plugin(tauri_plugin_autostart::init(

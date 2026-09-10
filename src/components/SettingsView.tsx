@@ -31,7 +31,7 @@ function Section({
   icon, title, children,
 }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
   return (
-    <Card className="gap-4 bg-card/60 py-5 backdrop-blur-sm">
+    <Card className="gap-4 border-border/80 bg-card/95 dark:bg-card/60 py-5 shadow-xs dark:shadow-sm backdrop-blur-sm">
       <CardHeader className="px-5">
         <CardTitle className="flex items-center gap-2.5 text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">
           <span className="flex size-7 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -181,8 +181,8 @@ export function SettingsView() {
                 className={cn(
                   "flex flex-col items-center gap-1.5 rounded-lg border p-3 text-xs transition-colors",
                   (settings.theme || "system") === opt.value
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                    ? "border-primary bg-primary/10 text-primary font-medium"
+                    : "border-border/80 bg-card text-muted-foreground hover:bg-accent hover:text-foreground",
                 )}
               >
                 {opt.icon}

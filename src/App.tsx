@@ -27,6 +27,7 @@ import { categoryOf, kindOf, type Category, type Kind } from "./lib/filetype";
 import { AddDialog } from "./components/AddDialog";
 import { RingProgress } from "./components/Loaders";
 import { Sidebar, type QueueFilter } from "./components/Sidebar";
+import { Titlebar } from "./components/Titlebar";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card } from "./components/ui/card";
@@ -398,15 +399,17 @@ function App() {
   const title = category === "all" ? QUEUE_TITLE[queue] : `${QUEUE_TITLE[queue]} · ${CATEGORY_TITLE[category]}`;
 
   return (
-    <div className="relative flex h-screen overflow-hidden">
+    <div className="relative flex h-screen flex-col overflow-hidden">
       {/* Ambient glow. Purely decorative, so hidden from assistive tech and
-          pinned behind everything else. */}
-      <div aria-hidden="true" className="pointer-events-none fixed -top-40 -left-40 -z-10 size-[28rem] rounded-full bg-primary/25 blur-3xl" />
-      <div aria-hidden="true" className="pointer-events-none fixed top-1/3 -right-40 -z-10 size-96 rounded-full bg-violet-500/20 blur-3xl" />
-      <div aria-hidden="true" className="pointer-events-none fixed -bottom-40 left-1/4 -z-10 size-96 rounded-full bg-fuchsia-500/10 blur-3xl" />
+          pinned behind everything else. Gentle pastel sheen in light mode, luminous in dark mode. */}
+      <div aria-hidden="true" className="pointer-events-none fixed -top-40 -left-40 -z-10 size-[28rem] rounded-full bg-primary/8 dark:bg-primary/25 blur-3xl" />
+      <div aria-hidden="true" className="pointer-events-none fixed top-1/3 -right-40 -z-10 size-96 rounded-full bg-violet-500/6 dark:bg-violet-500/20 blur-3xl" />
+      <div aria-hidden="true" className="pointer-events-none fixed -bottom-40 left-1/4 -z-10 size-96 rounded-full bg-fuchsia-500/4 dark:bg-fuchsia-500/10 blur-3xl" />
 
       <Toaster />
+      <Titlebar />
 
+      <div className="flex flex-1 overflow-hidden">
       <Sidebar
         queue={queue}
         onQueue={(q) => { setQueue(q); if (q === "all") setCategory("all"); setShowSettings(false); }}
@@ -476,7 +479,7 @@ function App() {
                 often. Adding is a deliberate act with several answers to give,
                 so it opens the dialog that asks for them. One elevated bar
                 rather than three loose controls floating on the page. */}
-            <div className="mt-3 flex items-center gap-1 rounded-xl border bg-card/60 p-1.5 shadow-sm backdrop-blur-sm">
+            <div className="mt-3 flex items-center gap-1 rounded-xl border border-border/80 bg-card/90 dark:bg-card/60 p-1.5 shadow-xs dark:shadow-sm backdrop-blur-sm transition-all focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/10">
               <div className="relative flex-1">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -528,7 +531,7 @@ function App() {
                 starts, rather than a bar of its own that pushes the list
                 down every time selection mode is entered. */}
             {selectMode && (
-              <div className="mt-3 flex h-9 items-center gap-2 rounded-xl border bg-card/80 px-3 shadow-sm backdrop-blur-sm">
+              <div className="mt-3 flex h-9 items-center gap-2 rounded-xl border border-border/80 bg-card/90 dark:bg-card/80 px-3 shadow-xs dark:shadow-sm backdrop-blur-sm">
                 <Checkbox
                   checked={allVisibleSelected ? true : selectedRows.length > 0 ? "indeterminate" : false}
                   onCheckedChange={toggleAll}
@@ -650,6 +653,7 @@ function App() {
           </div>
         )}
       </main>
+      </div>
 
       {detailRow && (
         <DetailModal
@@ -767,8 +771,8 @@ function Row({
   return (
     <Card
       className={cn(
-        "flex-row items-center gap-3 bg-card/75 p-3 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:shadow-lg dark:hover:shadow-primary/5",
-        selected ? "border-primary bg-accent/40" : "hover:border-primary/50",
+        "flex-row items-center gap-3 bg-card/95 dark:bg-card/75 p-3 backdrop-blur-sm transition-all shadow-[0_1px_3px_rgba(0,0,0,0.05),0_1px_2px_rgba(0,0,0,0.02)] border-border/80 hover:-translate-y-0.5 hover:shadow-[0_8px_20px_-4px_rgba(0,0,0,0.08)] dark:hover:shadow-primary/5",
+        selected ? "border-primary bg-accent/30 dark:bg-accent/40 ring-1 ring-primary/25" : "hover:border-primary/50",
         selectMode && "cursor-pointer",
       )}
       // In selection mode the whole row is the target, so the tile is an
@@ -839,7 +843,7 @@ function Row({
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="truncate text-sm font-medium" title={row.url}>{row.filename}</span>
             {domain && (
-              <span className="shrink-0 truncate rounded-full bg-muted/80 px-2 py-0.5 text-[10px] font-mono text-muted-foreground max-w-36">
+              <span className="shrink-0 truncate rounded-full border border-border/60 bg-muted/70 px-2 py-0.5 text-[10px] font-mono text-muted-foreground max-w-36">
                 {domain}
               </span>
             )}

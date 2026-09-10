@@ -49,7 +49,9 @@
   --shadow-cta: 0 0 0 1px rgba(94, 106, 210, 0.55), 0 4px 12px rgba(94, 106, 210, 0.32),
                 inset 0 1px 0 0 rgba(255, 255, 255, 0.28);
   --inner-hl: inset 0 1px 0 0 rgba(255, 255, 255, 0.6);
-  --ring: 0 0 0 4px rgba(94, 106, 210, 0.18);
+  /* Focus doubles the field's edge rather than blooming a soft halo around it:
+     a translucent outer glow over the ambient background reads as a smear. */
+  --ring: inset 0 0 0 1px var(--accent);
 
   /* Ambient light pools behind everything. */
   --blob-a: rgba(94, 106, 210, 0.18);
@@ -117,7 +119,7 @@
     --shadow-cta: 0 0 0 1px rgba(94, 106, 210, 0.5), 0 4px 12px rgba(94, 106, 210, 0.3),
                   inset 0 1px 0 0 rgba(255, 255, 255, 0.2);
     --inner-hl: inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
-    --ring: 0 0 0 4px rgba(94, 106, 210, 0.22);
+    --ring: inset 0 0 0 1px var(--accent);
 
     --blob-a: rgba(94, 106, 210, 0.25);
     --blob-b: rgba(139, 92, 246, 0.15);
@@ -165,7 +167,7 @@
   --shadow-cta: 0 0 0 1px rgba(94, 106, 210, 0.5), 0 4px 12px rgba(94, 106, 210, 0.3),
                 inset 0 1px 0 0 rgba(255, 255, 255, 0.2);
   --inner-hl: inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
-  --ring: 0 0 0 4px rgba(94, 106, 210, 0.22);
+  --ring: inset 0 0 0 1px var(--accent);
 
   --blob-a: rgba(94, 106, 210, 0.25);
   --blob-b: rgba(139, 92, 246, 0.15);
@@ -341,26 +343,6 @@ body { margin: 0; background: var(--bg); color: var(--fg); }
 .content { max-width: 830px; margin: 0 auto; padding: 20px 22px 56px; }
 
 .add { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
-
-.add input {
-  flex: 1;
-  min-width: 0;
-  height: 42px;
-  padding: 0 14px;
-  font: inherit;
-  font-size: 13.5px;
-  color: var(--fg);
-  background: var(--field);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
-}
-.add input::placeholder { color: var(--faint); }
-.add input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: var(--ring);
-}
 
 /* The one accent-filled control on the screen. The glow is part of the
    language: a flat accent button reads as unfinished here. */

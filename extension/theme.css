@@ -40,7 +40,7 @@
   --shadow-cta: 0 0 0 1px rgba(94, 106, 210, 0.55), 0 4px 12px rgba(94, 106, 210, 0.32),
                 inset 0 1px 0 0 rgba(255, 255, 255, 0.28);
   --inner-hl: inset 0 1px 0 0 rgba(255, 255, 255, 0.6);
-  --ring: 0 0 0 4px rgba(94, 106, 210, 0.18);
+  --ring: inset 0 0 0 1px var(--accent);
 
   --blob-a: rgba(94, 106, 210, 0.18);
   --blob-b: rgba(139, 92, 246, 0.13);
@@ -81,7 +81,7 @@
     --shadow-cta: 0 0 0 1px rgba(94, 106, 210, 0.5), 0 4px 12px rgba(94, 106, 210, 0.3),
                   inset 0 1px 0 0 rgba(255, 255, 255, 0.2);
     --inner-hl: inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
-    --ring: 0 0 0 4px rgba(94, 106, 210, 0.22);
+    --ring: inset 0 0 0 1px var(--accent);
 
     --blob-a: rgba(94, 106, 210, 0.25);
     --blob-b: rgba(139, 92, 246, 0.15);

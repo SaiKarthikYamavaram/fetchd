@@ -206,6 +206,15 @@ function App() {
 
   return (
     <div className="app">
+      {/* The design's ambient light pools. Purely decorative, so hidden from
+          assistive tech; `prefers-reduced-motion` parks them in App.css. */}
+      <div className="ambient" aria-hidden="true">
+        <span className="blob b1" />
+        <span className="blob b2" />
+        <span className="blob b3" />
+        <span className="blob b4" />
+      </div>
+
       <header className="topbar">
         <div className="brand">
           <span className="logo"><IconDownload size={18} /></span>

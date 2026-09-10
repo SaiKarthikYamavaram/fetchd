@@ -147,7 +147,9 @@ export function AddDialog({
           <input
             value={name}
             onChange={(e) => setName(e.currentTarget.value)}
-            placeholder={suggestedName(url) || "Automatic"}
+            // A video URL's last path segment is routing ("watch", "video"),
+            // never a filename — yt-dlp names it from the title instead.
+            placeholder={(video ? "" : suggestedName(url)) || "Automatic"}
             spellCheck={false}
           />
         </label>

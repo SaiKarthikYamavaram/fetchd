@@ -22,6 +22,21 @@ export function isVideoUrl(url: string): boolean {
   }
 }
 
+/// HLS/DASH manifests go through yt-dlp too, whatever host they sit on, so
+/// they get the same options a known video site would. Kept in sync with
+/// `is_stream_manifest` in src-tauri/src/ytdlp.rs — including the scheme
+/// check, so the two agree on what counts.
+export function isStreamManifest(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const path = u.pathname.toLowerCase();
+    return path.endsWith(".m3u8") || path.endsWith(".mpd");
+  } catch {
+    return false;
+  }
+}
+
 /// Best guess at the filename, shown as the placeholder so the field hints at
 /// what "automatic" will produce. The real name can still differ — the server's
 /// Content-Disposition or the video's title wins when the field is left blank.
@@ -79,7 +94,8 @@ export function AddDialog({
   // second URL is deleted is not helpful while editing.
   const asList = multi || batch;
   const one = links[0] ?? "";
-  const video = isVideoUrl(one);
+  // Either route lands on yt-dlp, which is what the quality picker drives.
+  const video = isVideoUrl(one) || isStreamManifest(one);
 
   // Escape must go through dismiss so a parked extension request is released.
   useEscape(() => {

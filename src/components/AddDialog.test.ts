@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isVideoUrl, suggestedName } from "./AddDialog";
+import { isStreamManifest, isVideoUrl, suggestedName } from "./AddDialog";
 
 describe("isVideoUrl", () => {
   // Decides only whether the quality picker is offered, so drift with the
@@ -25,6 +25,34 @@ describe("isVideoUrl", () => {
     expect(isVideoUrl("https://example.com/file.zip")).toBe(false);
     expect(isVideoUrl("not a url")).toBe(false);
     expect(isVideoUrl("")).toBe(false);
+  });
+});
+
+describe("isStreamManifest", () => {
+  // The dialog offers the quality picker for anything yt-dlp will handle, so
+  // this has to agree with is_stream_manifest in src-tauri/src/ytdlp.rs.
+  it("matches a manifest whatever host it sits on", () => {
+    expect(isStreamManifest("https://cdn.example.com/live/master.m3u8")).toBe(true);
+    expect(isStreamManifest("https://cdn.example.com/dash/manifest.mpd")).toBe(true);
+  });
+
+  it("ignores case, query and fragment", () => {
+    expect(isStreamManifest("https://e.test/LIVE/STREAM.M3U8")).toBe(true);
+    expect(isStreamManifest("https://e.test/v.m3u8?token=abc")).toBe(true);
+    expect(isStreamManifest("https://e.test/v.mpd#t=10")).toBe(true);
+  });
+
+  it("does not match a plain file, or a manifest name that is not the resource", () => {
+    expect(isStreamManifest("https://e.test/video.mp4")).toBe(false);
+    expect(isStreamManifest("https://e.test/get?f=movie.m3u8")).toBe(false);
+    expect(isStreamManifest("https://e.test/x.m3u8/thumb.jpg")).toBe(false);
+  });
+
+  it("stays inside http and https, like the backend", () => {
+    // Routing on this hands the URL to yt-dlp as a subprocess argument.
+    expect(isStreamManifest("file:///tmp/x.m3u8")).toBe(false);
+    expect(isStreamManifest("not a url")).toBe(false);
+    expect(isStreamManifest("")).toBe(false);
   });
 });
 

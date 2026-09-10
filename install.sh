@@ -40,7 +40,7 @@ purge_legacy() {
       found=1
     fi
   done
-  find "$ICON_ROOT" -name "$LEGACY.png" -delete 2>/dev/null || true
+  find "$ICON_ROOT" \( -name "$LEGACY.png" -o -name "$LEGACY.svg" \) -delete 2>/dev/null || true
   if [[ -n "$found" ]]; then
     say "Removed the old $LEGACY install. Its downloads, settings and queue are"
     say "kept, and move to $APP the first time you launch it."
@@ -50,7 +50,7 @@ purge_legacy() {
 
 uninstall() {
   rm -f "$BIN_DIR/$APP" "$APP_DIR/$APP.desktop" "$AUTOSTART"
-  find "$ICON_ROOT" -name "$APP.png" -delete 2>/dev/null || true
+  find "$ICON_ROOT" \( -name "$APP.png" -o -name "$APP.svg" \) -delete 2>/dev/null || true
   purge_legacy
   command -v update-desktop-database >/dev/null && update-desktop-database "$APP_DIR" 2>/dev/null || true
   say "Removed $APP. Downloads, settings and the queue are untouched:"
@@ -79,12 +79,29 @@ purge_legacy
 install -Dm755 "$release/$APP" "$BIN_DIR/$APP"
 say "Installed $BIN_DIR/$APP"
 
-for png in "$icons"/*x*.png; do
+# Only files named exactly <n>x<n>.png are hicolor sizes. The directory also
+# holds Windows tiles (Square89x89Logo.png) and @2x variants, both of which
+# match a naive *x*.png glob and would each create a junk theme directory.
+for png in "$icons"/*.png; do
   [[ -e "$png" ]] || continue
-  size="$(basename "$png" .png)"          # e.g. 128x128, 128x128@2x
-  [[ "$size" == *@* ]] && continue        # hicolor has no @2x convention
+  size="$(basename "$png" .png)"
+  [[ "$size" =~ ^[0-9]+x[0-9]+$ ]] || continue
   install -Dm644 "$png" "$ICON_ROOT/$size/apps/$APP.png"
 done
+
+# 128x128@2x.png is a 256px icon under a name only Tauri uses. hicolor has no
+# @2x convention but it does have a 256x256 size, which is the one desktops
+# reach for on a scaled display.
+if [[ -e "$icons/128x128@2x.png" ]]; then
+  install -Dm644 "$icons/128x128@2x.png" "$ICON_ROOT/256x256/apps/$APP.png"
+fi
+
+# The scalable entry wins over every raster size when the theme engine can use
+# it, which is what keeps the mark crisp in a launcher drawing at 96px.
+if [[ -e "$icons/mark.svg" ]]; then
+  install -Dm644 "$icons/mark.svg" "$ICON_ROOT/scalable/apps/$APP.svg"
+fi
+
 say "Installed icons under $ICON_ROOT"
 
 install -d "$APP_DIR"

@@ -106,10 +106,14 @@
     }
   `;
 
+  // The spool mark, same geometry as IconMark in src/components/icons.tsx: a
+  // ring broken into four segments, heavier stroke and butt caps so the gaps
+  // survive at 15px.
   const GLYPH =
     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" ' +
-    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-    '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>';
+    'stroke-width="4.2">' +
+    '<circle cx="12" cy="12" r="9.5" stroke-dasharray="12.435 2.487" ' +
+    'transform="rotate(-90 12 12)"/></svg>';
 
   function build(label) {
     const host = document.createElement("div");

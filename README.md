@@ -145,6 +145,12 @@ src-tauri/src/
 extension/            the MV3 browser extension
 ```
 
+The icons are generated, not drawn by hand:
+
+```sh
+python3 src-tauri/icons/generate.py    # needs rsvg-convert and magick
+```
+
 ### Notes for anyone changing this
 
 - `queue.json` is written through a temp file and renamed, and an unreadable

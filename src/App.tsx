@@ -18,7 +18,7 @@ import * as selection from "./lib/selection";
 import { kindOf, type Kind } from "./lib/filetype";
 import { AddDialog } from "./components/AddDialog";
 import {
-  IconArchive, IconDisc, IconDoc, IconDownload, IconFile,
+  IconArchive, IconDisc, IconDoc, IconDownload, IconFile, IconMark,
   IconFolder, IconImage, IconImport, IconMusic, IconOpen, IconPause, IconPlay,
   IconBook, IconCheck, IconCode, IconEdit, IconFont, IconPackage, IconPlus,
   IconRetry, IconSearch, IconSelect, IconSettings, IconSheet, IconSlides,
@@ -285,7 +285,7 @@ function App() {
 
       <header className="topbar">
         <div className="brand">
-          <span className="logo"><IconDownload size={18} /></span>
+          <span className="logo"><IconMark size={18} /></span>
           <span className="wordmark">spool</span>
           {totalSpeed > 0 && (
             <span className="live-rate">

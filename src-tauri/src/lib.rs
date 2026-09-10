@@ -205,6 +205,27 @@ async fn encode_thumb(path: &std::path::Path) -> Option<String> {
     ))
 }
 
+/// Put the autostart entry in whatever state the settings ask for.
+///
+/// Reconciled rather than toggled: the entry is a file on disk that the user
+/// (or another app, or a reinstall) can change behind our back, so the
+/// setting is the intent and this makes the disk match it.
+fn apply_autostart(app: &AppHandle, want: bool) {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let manager = app.autolaunch();
+    let enabled = manager.is_enabled().unwrap_or(false);
+    if enabled == want {
+        return;
+    }
+    let result = if want { manager.enable() } else { manager.disable() };
+    if let Err(e) = result {
+        // Not fatal: a desktop without an autostart directory, or a sandbox
+        // that forbids writing one, should not break saving settings.
+        eprintln!("fetchd: could not update the autostart entry: {e}");
+    }
+}
+
 #[tauri::command]
 fn resume_all(app: AppHandle, state: Shared<'_>) {
     state.resume_all();
@@ -231,7 +252,9 @@ fn get_settings(state: Shared<'_>) -> Settings {
 // throttle, which spawns a refill task and would panic off-runtime.
 #[tauri::command]
 async fn update_settings(app: AppHandle, state: Shared<'_>, settings: Settings) -> Result<(), ()> {
+    let want_autostart = settings.start_on_login;
     state.set_settings(settings);
+    apply_autostart(&app, want_autostart);
     state::pump(&app, &state);
     Ok(())
 }
@@ -248,6 +271,12 @@ pub fn run() {
         // it every launch reopens at the configured default, which is smaller
         // than the add dialog needs.
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        // `--hidden` is what the autostart entry passes, so a login launch can
+        // go straight to the tray while a launcher launch shows itself.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--hidden"]),
+        ))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -258,6 +287,23 @@ pub fn run() {
 
             let state = Arc::new(AppState::new(data_dir, config_dir).map_err(std::io::Error::other)?);
             app.manage(Arc::clone(&state));
+
+            // The autostart entry can drift from the setting — a reinstall, or
+            // the user editing their desktop's startup list — so make the disk
+            // match the intent on every launch.
+            apply_autostart(&handle, state.settings().start_on_login);
+
+            // A login launch passes --hidden; start in the tray rather than
+            // opening a window the user did not ask for. Ignored unless the
+            // setting agrees, so a stale autostart entry cannot silently
+            // swallow a manual launch.
+            let hidden = std::env::args().any(|a| a == "--hidden")
+                && state.settings().start_minimised;
+            if hidden {
+                if let Some(window) = handle.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
 
             // System tray: left-click restores the window; the menu offers an
             // explicit Show and a real Quit (the window's close button only
@@ -364,8 +410,22 @@ pub fn run() {
         // running in the background. Quit is via the tray menu.
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+                // With background running on, the close button hides to the
+                // tray and transfers carry on. With it off, close means quit —
+                // and quitting has to go through `shutdown` so in-flight
+                // progress is checkpointed rather than lost.
+                let background = window
+                    .app_handle()
+                    .try_state::<Arc<AppState>>()
+                    .map(|s| s.settings().run_in_background)
+                    .unwrap_or(true);
+
+                if background {
+                    let _ = window.hide();
+                    api.prevent_close();
+                } else if let Some(state) = window.app_handle().try_state::<Arc<AppState>>() {
+                    state.shutdown();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![

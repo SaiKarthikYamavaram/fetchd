@@ -170,6 +170,42 @@ export function SettingsView() {
 
       <hr />
 
+      <h3>Startup &amp; background</h3>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={settings.run_in_background}
+          onChange={(e) => update({ run_in_background: e.currentTarget.checked }, true)}
+        />
+        <span>Keep running in the tray when the window is closed</span>
+      </label>
+      <p className="help">
+        {settings.run_in_background
+          ? "Downloads carry on after you close the window. Quit from the tray icon to stop them."
+          : "Closing the window quits fetchd. Anything still downloading is paused and resumes next launch."}
+      </p>
+
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={settings.start_on_login}
+          onChange={(e) => update({ start_on_login: e.currentTarget.checked }, true)}
+        />
+        <span>Start fetchd automatically when this computer starts</span>
+      </label>
+      {settings.start_on_login && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={settings.start_minimised}
+            onChange={(e) => update({ start_minimised: e.currentTarget.checked }, true)}
+          />
+          <span>Start in the tray, without opening the window</span>
+        </label>
+      )}
+
+      <hr />
+
       <h3>Schedule</h3>
       <label className="check">
         <input

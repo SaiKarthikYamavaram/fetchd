@@ -72,6 +72,30 @@ pub struct Settings {
     pub schedule_start: String,
     #[serde(default)]
     pub schedule_stop: String,
+    /// Closing the window hides to the tray and downloads carry on. Off makes
+    /// the close button quit, which is what a user who does not want a
+    /// background process expects.
+    ///
+    /// Defaults true, and explicitly so: a plain `#[serde(default)]` on a bool
+    /// is `false`, which would read every settings file written before this
+    /// field existed as "quit on close" and change the behaviour under people
+    /// who never asked for it.
+    #[serde(default = "yes")]
+    pub run_in_background: bool,
+    /// Start fetchd with the desktop session. Written to the desktop's
+    /// autostart entry, so it is real state on disk rather than a preference
+    /// we consult.
+    #[serde(default)]
+    pub start_on_login: bool,
+    /// Start minimised to the tray. Only meaningful with `start_on_login`:
+    /// a launcher-started app should show itself.
+    #[serde(default = "yes")]
+    pub start_minimised: bool,
+}
+
+/// Serde needs a function for a non-`false` bool default.
+fn yes() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -92,6 +116,11 @@ impl Default for Settings {
             schedule_enabled: false,
             schedule_start: "01:00".into(),
             schedule_stop: "07:00".into(),
+            // On by default: this is a download manager, and closing the
+            // window mid-transfer should not cancel the transfer.
+            run_in_background: true,
+            start_on_login: false,
+            start_minimised: true,
         }
     }
 }
@@ -1648,6 +1677,31 @@ mod tests {
     }
 
     // -- settings -----------------------------------------------------------
+
+    /// The startup settings are plain booleans, but they gained defaults after
+    /// the file format already existed — so a settings.json written before
+    /// them must still load, and must not silently turn tray-running off.
+    #[test]
+    fn settings_from_an_older_build_keep_running_in_the_tray() {
+        let legacy = r#"{
+            "download_dir": null,
+            "max_concurrent": 3,
+            "segments": 4,
+            "theme": "dark",
+            "cookies_file": null,
+            "user_agent": null
+        }"#;
+        let s: Settings = serde_json::from_str(legacy).expect("an older settings file must load");
+        assert_eq!(s.max_concurrent, 3);
+        assert_eq!(s.theme, "dark");
+
+        // The point of the test: a bool's serde default is `false`, which
+        // would have made the close button quit for every existing user.
+        assert!(s.run_in_background, "an absent field must not change how close behaves");
+        assert!(s.start_minimised, "an absent field must not change how a login launch behaves");
+        // This one is genuinely off until asked for.
+        assert!(!s.start_on_login);
+    }
 
     /// Settings arrive over IPC. An out-of-range concurrency would have `pump`
     /// spawn that many transfers at once, and 0 would stall the queue entirely.

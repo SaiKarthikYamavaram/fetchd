@@ -47,6 +47,9 @@ export type Settings = {
   schedule_enabled: boolean;
   schedule_start: string;
   schedule_stop: string;
+  run_in_background: boolean;
+  start_on_login: boolean;
+  start_minimised: boolean;
 };
 
 /// Payload of `download://confirm`: a captured URL awaiting the add dialog.

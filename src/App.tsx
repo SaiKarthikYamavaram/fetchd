@@ -286,7 +286,7 @@ function App() {
       <header className="topbar">
         <div className="brand">
           <span className="logo"><IconDownload size={18} /></span>
-          <span className="wordmark">fetchd</span>
+          <span className="wordmark">spool</span>
           {totalSpeed > 0 && (
             <span className="live-rate">
               <span className="dot" />
@@ -472,7 +472,7 @@ function App() {
                   <>
                     Hit <strong>Add</strong> to paste a link, <strong>Import</strong> for a
                     list of them, or right-click any link in your browser and choose{" "}
-                    <strong>Download with fetchd</strong>.
+                    <strong>Download with spool</strong>.
                   </>
                 )}
               </p>

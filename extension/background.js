@@ -1,9 +1,9 @@
-// fetchd browser integration — service worker.
+// spool browser integration — service worker.
 //
 // Beyond routing a single link, this mirrors what a download manager's browser
 // module does: it watches page responses for downloadable media, keeps a
 // per-tab list, badges the toolbar with the count, and lets the popup grab any
-// of them (or every link/image on the page) — all replayed through fetchd with
+// of them (or every link/image on the page) — all replayed through spool with
 // the browser's own cookies so authenticated and challenge-protected files
 // work.
 
@@ -122,7 +122,7 @@ async function offerPanel(tabId, tab) {
     await chrome.tabs.sendMessage(tabId, {
       type: "showPanel",
       url: tab.url,
-      label: videoTitle(tab.title) ? "Download this video" : "Download with fetchd",
+      label: videoTitle(tab.title) ? "Download this video" : "Download with spool",
     });
   } catch {
     // Restricted page (store, PDF viewer, other extensions) — no panel there.
@@ -137,23 +137,23 @@ chrome.tabs.onRemoved.addListener((tabId) => clearDetected(tabId));
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
-      id: "fetchd-link", title: "Download with fetchd",
+      id: "spool-link", title: "Download with spool",
       contexts: ["link", "audio", "video", "image"],
     });
     chrome.contextMenus.create({
-      id: "fetchd-video", title: "Download video with fetchd (yt-dlp)",
+      id: "spool-video", title: "Download video with spool (yt-dlp)",
       contexts: ["page", "link", "video"],
     });
     chrome.contextMenus.create({
-      id: "fetchd-selection", title: "Download links in selection with fetchd",
+      id: "spool-selection", title: "Download links in selection with spool",
       contexts: ["selection"],
     });
     chrome.contextMenus.create({
-      id: "fetchd-all-links", title: "Download all links on this page",
+      id: "spool-all-links", title: "Download all links on this page",
       contexts: ["page"],
     });
     chrome.contextMenus.create({
-      id: "fetchd-all-images", title: "Download all images on this page",
+      id: "spool-all-images", title: "Download all images on this page",
       contexts: ["page"],
     });
   });
@@ -161,19 +161,19 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const referer = info.pageUrl || (tab && tab.url) || "";
-  if (info.menuItemId === "fetchd-link") {
+  if (info.menuItemId === "spool-link") {
     const url = info.linkUrl || info.srcUrl;
     if (url) await sendOne(url, referer);
-  } else if (info.menuItemId === "fetchd-video") {
+  } else if (info.menuItemId === "spool-video") {
     // Prefer an explicit link/media target; otherwise the page URL itself
     // (yt-dlp resolves the video from a watch page).
     const url = info.linkUrl || info.srcUrl || info.pageUrl || (tab && tab.url);
     if (url) await sendOne(url, referer, true, videoTitle(tab && tab.title));
-  } else if (info.menuItemId === "fetchd-selection") {
+  } else if (info.menuItemId === "spool-selection") {
     await grabFromPage(tab, "selection", referer);
-  } else if (info.menuItemId === "fetchd-all-links") {
+  } else if (info.menuItemId === "spool-all-links") {
     await grabFromPage(tab, "links", referer);
-  } else if (info.menuItemId === "fetchd-all-images") {
+  } else if (info.menuItemId === "spool-all-images") {
     await grabFromPage(tab, "images", referer);
   }
 });
@@ -225,9 +225,9 @@ async function grabFromPage(tab, mode, referer) {
   }
   let ok = 0;
   for (const u of wanted) {
-    if (await sendToFetchd(u, referer, isStreamManifest(u), false)) ok++;
+    if (await sendToSpool(u, referer, isStreamManifest(u), false)) ok++;
   }
-  notify("Sent to fetchd", `${ok} of ${wanted.length} ${label} queued.`);
+  notify("Sent to spool", `${ok} of ${wanted.length} ${label} queued.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ chrome.downloads.onCreated.addListener((item) => {
 
 /// Cancel first, ask questions after.
 ///
-/// The old order checked that fetchd was reachable before cancelling, which
+/// The old order checked that spool was reachable before cancelling, which
 /// meant a round trip to 127.0.0.1 while the browser was already prompting for
 /// a location and pulling bytes — so the download happened twice. Cancelling
 /// is the first thing now, and the restore path below is what makes that safe:
@@ -301,18 +301,18 @@ async function takeOver(item) {
   }
 
   const referer = item.referrer || url;
-  if (await sendToFetchd(url, referer)) {
-    notify("Sent to fetchd", filenameFromUrl(url));
+  if (await sendToSpool(url, referer)) {
+    notify("Sent to spool", filenameFromUrl(url));
     return;
   }
 
-  // Handover failed — fetchd is not running, or refused it. Give the download
+  // Handover failed — spool is not running, or refused it. Give the download
   // back rather than silently losing it.
   try {
     await chrome.downloads.download({ url });
-    notify("fetchd did not take it", "Restored the browser download.");
+    notify("spool did not take it", "Restored the browser download.");
   } catch {
-    notify("Download lost", "fetchd rejected it and the browser could not restart it.");
+    notify("Download lost", "spool rejected it and the browser could not restart it.");
   }
 }
 
@@ -331,14 +331,14 @@ chrome.commands?.onCommand.addListener(async (command) => {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
     if (msg.type === "getDetected") {
-      sendResponse({ items: await getDetected(msg.tabId), alive: await fetchdAlive() });
+      sendResponse({ items: await getDetected(msg.tabId), alive: await spoolAlive() });
     } else if (msg.type === "download") {
-      sendResponse({ ok: await sendToFetchd(msg.url, msg.referer, msg.video || false) });
+      sendResponse({ ok: await sendToSpool(msg.url, msg.referer, msg.video || false) });
     } else if (msg.type === "downloadAll") {
       const items = await getDetected(msg.tabId);
       let ok = 0;
       for (const it of items) {
-        if (await sendToFetchd(it.url, msg.referer, isStreamManifest(it.url), false)) ok++;
+        if (await sendToSpool(it.url, msg.referer, isStreamManifest(it.url), false)) ok++;
       }
       sendResponse({ ok, total: items.length });
     } else if (msg.type === "clear") {
@@ -350,10 +350,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 async function sendOne(url, referer, video = false, name = null) {
-  const ok = await sendToFetchd(url, referer, video);
+  const ok = await sendToSpool(url, referer, video);
   const label = video ? (name || "Video") : filenameFromUrl(url);
-  notify(ok ? "Sent to fetchd" : "fetchd not reachable",
-         ok ? label : "Start the fetchd app and try again.");
+  notify(ok ? "Sent to spool" : "spool not reachable",
+         ok ? label : "Start the spool app and try again.");
 }
 
 function notify(title, message) {

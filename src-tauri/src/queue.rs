@@ -151,12 +151,12 @@ pub fn load_queue(path: &Path) -> Vec<Download> {
             let aside = path.with_file_name(format!("queue.unreadable-{}.json", now_secs()));
             match std::fs::rename(path, &aside) {
                 Ok(()) => eprintln!(
-                    "fetchd: {} could not be read ({e}); kept a copy at {}",
+                    "spool: {} could not be read ({e}); kept a copy at {}",
                     path.display(),
                     aside.display()
                 ),
                 Err(move_err) => eprintln!(
-                    "fetchd: {} could not be read ({e}) and could not be moved aside ({move_err})",
+                    "spool: {} could not be read ({e}) and could not be moved aside ({move_err})",
                     path.display()
                 ),
             }
@@ -286,7 +286,7 @@ mod tests {
     /// behind, or the data directory fills with `queue.json.tmp` copies.
     #[test]
     fn save_leaves_no_temp_file_behind() {
-        let dir = std::env::temp_dir().join(format!("fetchd-tmpfile-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("spool-tmpfile-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("queue.json");
 
@@ -303,7 +303,7 @@ mod tests {
     /// overwrites the file.
     #[test]
     fn an_unreadable_queue_is_moved_aside_not_dropped() {
-        let dir = std::env::temp_dir().join(format!("fetchd-quarantine-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("spool-quarantine-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("queue.json");
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn a_missing_queue_file_is_simply_empty() {
-        let dir = std::env::temp_dir().join(format!("fetchd-firstrun-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("spool-firstrun-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         assert!(load_queue(&dir.join("queue.json")).is_empty());
@@ -341,14 +341,14 @@ mod tests {
 
     #[test]
     fn load_of_a_missing_file_is_none() {
-        let missing = std::env::temp_dir().join("fetchd-does-not-exist-ever.json");
+        let missing = std::env::temp_dir().join("spool-does-not-exist-ever.json");
         let _ = std::fs::remove_file(&missing);
         assert!(load_json::<Vec<Download>>(&missing).is_none());
     }
 
     #[test]
     fn atomic_save_and_load_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("fetchd-queue-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("spool-queue-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("queue.json");
 
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn load_of_corrupt_file_is_none_not_panic() {
-        let dir = std::env::temp_dir().join(format!("fetchd-corrupt-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("spool-corrupt-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("queue.json");
         std::fs::write(&path, b"{ truncated").unwrap();

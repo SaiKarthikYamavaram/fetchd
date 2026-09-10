@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Install fetchd for the current user. No root, nothing outside ~/.local, and
+# Install spool for the current user. No root, nothing outside ~/.local, and
 # reversible with --uninstall.
 #
 # A distro package would be the tidier answer, but the bundles tauri produces
@@ -10,11 +10,13 @@
 
 set -euo pipefail
 
-APP=fetchd
+APP=spool
+LEGACY=fetchd          # what the app was called before it was renamed
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICON_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
 AUTOSTART="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/$APP.desktop"
+LEGACY_AUTOSTART="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/$LEGACY.desktop"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 release="$here/src-tauri/target/release"
@@ -23,13 +25,37 @@ icons="$here/src-tauri/icons"
 say() { printf '%s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+# Remove what the pre-rename install left behind.
+#
+# Nothing here is shared with the current install: a separate binary on PATH, a
+# second entry in the launcher, and an autostart entry pointing at a binary that
+# is about to be deleted. The data directories are NOT touched — the app moves
+# those itself on its first launch, which is the only place that knows whether
+# the move already happened.
+purge_legacy() {
+  local found=
+  for f in "$BIN_DIR/$LEGACY" "$APP_DIR/$LEGACY.desktop" "$LEGACY_AUTOSTART"; do
+    if [[ -e "$f" ]]; then
+      rm -f "$f"
+      found=1
+    fi
+  done
+  find "$ICON_ROOT" -name "$LEGACY.png" -delete 2>/dev/null || true
+  if [[ -n "$found" ]]; then
+    say "Removed the old $LEGACY install. Its downloads, settings and queue are"
+    say "kept, and move to $APP the first time you launch it."
+  fi
+  return 0
+}
+
 uninstall() {
   rm -f "$BIN_DIR/$APP" "$APP_DIR/$APP.desktop" "$AUTOSTART"
   find "$ICON_ROOT" -name "$APP.png" -delete 2>/dev/null || true
+  purge_legacy
   command -v update-desktop-database >/dev/null && update-desktop-database "$APP_DIR" 2>/dev/null || true
   say "Removed $APP. Downloads, settings and the queue are untouched:"
-  say "  ${XDG_DATA_HOME:-$HOME/.local/share}/com.saikarthik.fetchd"
-  say "  ${XDG_CONFIG_HOME:-$HOME/.config}/com.saikarthik.fetchd"
+  say "  ${XDG_DATA_HOME:-$HOME/.local/share}/com.saikarthik.spool"
+  say "  ${XDG_CONFIG_HOME:-$HOME/.config}/com.saikarthik.spool"
   exit 0
 }
 
@@ -40,11 +66,15 @@ uninstall() {
 
 # The app is likely running from a previous install; replacing a busy binary
 # fails with ETXTBSY, so stop it first.
-if pgrep -x "$APP" >/dev/null 2>&1; then
-  say "Stopping the running $APP…"
-  pkill -x "$APP" || true
-  sleep 1
-fi
+for proc in "$APP" "$LEGACY"; do
+  if pgrep -x "$proc" >/dev/null 2>&1; then
+    say "Stopping the running $proc…"
+    pkill -x "$proc" || true
+    sleep 1
+  fi
+done
+
+purge_legacy
 
 install -Dm755 "$release/$APP" "$BIN_DIR/$APP"
 say "Installed $BIN_DIR/$APP"
@@ -61,7 +91,7 @@ install -d "$APP_DIR"
 cat > "$APP_DIR/$APP.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=fetchd
+Name=spool
 GenericName=Download Manager
 Comment=Segmented downloads, video sites, and browser hand-off
 Exec=$BIN_DIR/$APP %U
@@ -69,7 +99,7 @@ Icon=$APP
 Terminal=false
 Categories=Network;FileTransfer;
 Keywords=download;downloader;idm;video;yt-dlp;
-StartupWMClass=fetchd
+StartupWMClass=spool
 EOF
 say "Installed $APP_DIR/$APP.desktop"
 

@@ -182,7 +182,7 @@ export function SettingsView() {
       <p className="help">
         {settings.run_in_background
           ? "Downloads carry on after you close the window. Quit from the tray icon to stop them."
-          : "Closing the window quits fetchd. Anything still downloading is paused and resumes next launch."}
+          : "Closing the window quits spool. Anything still downloading is paused and resumes next launch."}
       </p>
 
       <label className="check">
@@ -191,7 +191,7 @@ export function SettingsView() {
           checked={settings.start_on_login}
           onChange={(e) => update({ start_on_login: e.currentTarget.checked }, true)}
         />
-        <span>Start fetchd automatically when this computer starts</span>
+        <span>Start spool automatically when this computer starts</span>
       </label>
       {settings.start_on_login && (
         <label className="check">
@@ -211,7 +211,7 @@ export function SettingsView() {
         Some hosts sit behind an interactive anti-bot challenge and answer with{" "}
         <code>403</code>. No download manager can solve one — not this app, not IDM.
         What IDM actually does is let the <em>browser</em> solve it and then reuse
-        that session. Do the same here: export your cookies and point fetchd at
+        that session. Do the same here: export your cookies and point spool at
         the file.
       </p>
       <p className="help">
@@ -251,7 +251,7 @@ export function SettingsView() {
       <p className="help">
         Streaming sites (YouTube, Vimeo, and ~1800 more) are handled by{" "}
         <code>yt-dlp</code>, which must be installed. Right-click a page and choose{" "}
-        <em>Download video with fetchd</em>, or paste a video URL — known sites are
+        <em>Download video with spool</em>, or paste a video URL — known sites are
         auto-detected.
       </p>
 

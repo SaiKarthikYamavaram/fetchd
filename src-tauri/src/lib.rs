@@ -7,6 +7,7 @@ mod thumbs;
 mod throttle;
 mod ytdlp;
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -205,6 +206,68 @@ async fn encode_thumb(path: &std::path::Path) -> Option<String> {
     ))
 }
 
+/// The bundle identifier this app used before it was renamed to `spool`.
+const LEGACY_ID: &str = "com.saikarthik.fetchd";
+
+/// Carry one file or directory across from the pre-rename install.
+///
+/// Tauri derives the data and config directories from the bundle identifier, so
+/// renaming the app moved them — leaving an existing install's queue, settings
+/// and thumbnail cache at a path nothing will ever read again.
+///
+/// Moving the whole directory looks tidier and does not work: WebKitGTK creates
+/// its own subdirectories inside the data directory before `setup` runs, so by
+/// the time this could rename it the destination already exists. Only the
+/// entries this app owns are moved, and only when nothing is at the new path —
+/// overwriting a live queue with the pre-rename one is the single thing this
+/// must never do, and it is also what makes a second launch a no-op.
+fn migrate_legacy_entry(current_dir: &Path, name: &str) {
+    let target = current_dir.join(name);
+    if target.exists() {
+        return;
+    }
+    let Some(legacy) = current_dir.parent().map(|p| p.join(LEGACY_ID).join(name)) else {
+        return;
+    };
+    if !legacy.exists() {
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(current_dir) {
+        eprintln!("spool: could not create {}: {e}", current_dir.display());
+        return;
+    }
+    match std::fs::rename(&legacy, &target) {
+        Ok(()) => eprintln!("spool: moved {} to {}", legacy.display(), target.display()),
+        // Not fatal: the app starts without it rather than not at all, and the
+        // old copy is still there to be moved by hand.
+        Err(e) => eprintln!(
+            "spool: could not move {} to {}: {e}",
+            legacy.display(),
+            target.display()
+        ),
+    }
+}
+
+/// Delete the autostart entry left by the pre-rename app.
+///
+/// It names a binary that the rename replaced, so at the next login it either
+/// does nothing or — worse, if an old build is still installed — starts a
+/// second download manager alongside this one, both writing the same files.
+/// The current entry is written separately by `apply_autostart`.
+#[cfg(target_os = "linux")]
+fn remove_legacy_autostart() {
+    let Some(home) = dirs_home() else { return };
+    let entry = home.join(".config/autostart/fetchd.desktop");
+    if entry.exists() {
+        if let Err(e) = std::fs::remove_file(&entry) {
+            eprintln!("spool: could not remove {}: {e}", entry.display());
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn remove_legacy_autostart() {}
+
 /// Whether the autostart entry on disk still points at the binary running now.
 ///
 /// `is_enabled` only asks whether the entry file exists. It cannot tell that
@@ -219,7 +282,7 @@ fn autostart_entry_is_current() -> bool {
         return true; // cannot compare; leave the entry alone
     };
     let Some(home) = dirs_home() else { return true };
-    let entry = home.join(".config/autostart/fetchd.desktop");
+    let entry = home.join(".config/autostart/spool.desktop");
     let Ok(text) = std::fs::read_to_string(&entry) else {
         return true; // no entry to be stale
     };
@@ -261,7 +324,7 @@ fn apply_autostart(app: &AppHandle, want: bool) {
         // Rewrite by removing first: `enable` will not replace an entry it
         // believes is already correct.
         if let Err(e) = manager.disable() {
-            eprintln!("fetchd: could not replace the stale autostart entry: {e}");
+            eprintln!("spool: could not replace the stale autostart entry: {e}");
             return;
         }
     }
@@ -270,7 +333,7 @@ fn apply_autostart(app: &AppHandle, want: bool) {
     if let Err(e) = result {
         // Not fatal: a desktop without an autostart directory, or a sandbox
         // that forbids writing one, should not break saving settings.
-        eprintln!("fetchd: could not update the autostart entry: {e}");
+        eprintln!("spool: could not update the autostart entry: {e}");
     }
 }
 
@@ -333,6 +396,16 @@ pub fn run() {
             let data_dir = handle.path().app_data_dir()?;
             let config_dir = handle.path().app_config_dir()?;
 
+            // The app was called `fetchd` until it was renamed; carry an
+            // existing install's queue and settings over before reading them.
+            for name in ["queue.json", "thumbs"] {
+                migrate_legacy_entry(&data_dir, name);
+            }
+            for name in ["settings.json", ".window-state.json"] {
+                migrate_legacy_entry(&config_dir, name);
+            }
+            remove_legacy_autostart();
+
             let state = Arc::new(AppState::new(data_dir, config_dir).map_err(std::io::Error::other)?);
             app.manage(Arc::clone(&state));
 
@@ -360,7 +433,7 @@ pub fn run() {
             // Pause all and Resume all are here too: the app spends most of a
             // long download minimised, and reaching for the queue's brakes
             // should not mean raising the window first.
-            let show = MenuItem::with_id(app, "show", "Show fetchd", true, None::<&str>)?;
+            let show = MenuItem::with_id(app, "show", "Show spool", true, None::<&str>)?;
             let pause = MenuItem::with_id(app, "pause_all", "Pause all", true, None::<&str>)?;
             let resume = MenuItem::with_id(app, "resume_all", "Resume all", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -371,7 +444,7 @@ pub fn run() {
             let quit_state = Arc::clone(&state);
             TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("fetchd")
+                .tooltip("spool")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
@@ -478,4 +551,80 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A parent holding both identifiers' directories, with `queue.json`
+    /// already sitting in the old one.
+    fn legacy_install(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("spool-migrate-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let legacy = root.join(LEGACY_ID);
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("queue.json"), "old").unwrap();
+        let current = root.join("com.saikarthik.spool");
+        (root, current)
+    }
+
+    #[test]
+    fn moves_the_queue_when_there_is_nothing_to_lose() {
+        let (root, current) = legacy_install("move");
+
+        migrate_legacy_entry(&current, "queue.json");
+
+        assert_eq!(
+            std::fs::read_to_string(current.join("queue.json")).unwrap(),
+            "old"
+        );
+        assert!(!root.join(LEGACY_ID).join("queue.json").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // WebKitGTK creates the data directory before this runs, so the directory
+    // existing must not stop the queue coming across.
+    #[test]
+    fn moves_the_queue_into_a_directory_someone_else_created() {
+        let (root, current) = legacy_install("exists");
+        std::fs::create_dir_all(current.join("WebKitCache")).unwrap();
+
+        migrate_legacy_entry(&current, "queue.json");
+
+        assert_eq!(
+            std::fs::read_to_string(current.join("queue.json")).unwrap(),
+            "old"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // The whole reason the function checks before it moves: this runs on every
+    // launch, and the second one must not put a stale queue over the live one.
+    #[test]
+    fn leaves_a_queue_that_is_already_there_alone() {
+        let (root, current) = legacy_install("keep");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join("queue.json"), "live").unwrap();
+
+        migrate_legacy_entry(&current, "queue.json");
+
+        assert_eq!(
+            std::fs::read_to_string(current.join("queue.json")).unwrap(),
+            "live"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn does_nothing_for_a_fresh_install() {
+        let root = std::env::temp_dir().join(format!("spool-migrate-fresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let current = root.join("com.saikarthik.spool");
+
+        migrate_legacy_entry(&current, "queue.json");
+
+        assert!(!current.exists(), "no directory should be created for nothing");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

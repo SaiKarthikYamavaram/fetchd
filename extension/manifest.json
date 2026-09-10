@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "fetchd integration",
+  "name": "spool integration",
   "version": "1.4.1",
-  "description": "Send downloads to fetchd with the browser's cookies. Detects media on a page, grabs all links or images, and routes captured downloads by file type.",
+  "description": "Send downloads to spool with the browser's cookies. Detects media on a page, grabs all links or images, and routes captured downloads by file type.",
   "permissions": [
     "cookies",
     "contextMenus",
@@ -21,7 +21,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "fetchd",
+    "default_title": "spool",
     "default_popup": "popup.html"
   },
   "options_ui": {
@@ -37,7 +37,7 @@
       "suggested_key": {
         "default": "Ctrl+Shift+Y"
       },
-      "description": "Download this page's video with fetchd"
+      "description": "Download this page's video with spool"
     }
   }
 }

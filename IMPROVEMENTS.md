@@ -1,6 +1,6 @@
-# fetchd — Codebase Audit, Critical Bug Fixes & Architectural Roadmap
+# spool — Codebase Audit, Critical Bug Fixes & Architectural Roadmap
 
-This document catalogs the findings, critical bugs, performance bottlenecks, and architectural refinements discovered during the comprehensive audit of **fetchd** across the segmented HTTP engine, `yt-dlp` video pipeline, token-bucket bandwidth throttle, local extension bridge, Chrome MV3 extension, and React UI.
+This document catalogs the findings, critical bugs, performance bottlenecks, and architectural refinements discovered during the comprehensive audit of **spool** across the segmented HTTP engine, `yt-dlp` video pipeline, token-bucket bandwidth throttle, local extension bridge, Chrome MV3 extension, and React UI.
 
 ---
 

@@ -1,7 +1,7 @@
 // Shared helpers for background, popup and options. Loaded via importScripts in
 // the service worker and a plain <script> in the pages.
 
-const FETCHD = "http://127.0.0.1:47831";
+const SPOOL = "http://127.0.0.1:47831";
 
 // Cookies bind to the exact User-Agent that earned them, so always send the
 // browser's real one.
@@ -9,7 +9,7 @@ const UA = typeof navigator !== "undefined" ? navigator.userAgent : "";
 
 const DEFAULTS = {
   enabled: true,
-  intercept: false, // hand the browser's own downloads to fetchd
+  intercept: false, // hand the browser's own downloads to spool
   // Let the app ask for a folder/quality per download instead of using the
   // defaults. The app window comes forward with its add dialog.
   askBeforeDownload: true,
@@ -116,7 +116,7 @@ function filenameFromUrl(url) {
   } catch { return url; }
 }
 
-// Whether an intercepted browser download is one fetchd should take over.
+// Whether an intercepted browser download is one spool should take over.
 //
 // Pure and synchronous on purpose: `downloads.onCreated` is a race — Chrome
 // does not wait for an async listener, so anything awaited before the cancel
@@ -147,14 +147,14 @@ async function cookieHeaderFor(url) {
   } catch { return null; }
 }
 
-// Send one download to fetchd. `video` forces the yt-dlp engine (for streaming
+// Send one download to spool. `video` forces the yt-dlp engine (for streaming
 // sites). `ask` overrides the "ask before download" setting — batch grabs pass
 // false so a 30-link grab doesn't open 30 dialogs. Returns true on success.
-async function sendToFetchd(url, referer, video = false, ask = null) {
+async function sendToSpool(url, referer, video = false, ask = null) {
   const cookie = await cookieHeaderFor(url);
   const askBeforeDownload = ask === null ? (await getSettings()).askBeforeDownload : ask;
   try {
-    const res = await fetch(`${FETCHD}/add`, {
+    const res = await fetch(`${SPOOL}/add`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url, cookie, userAgent: UA, referer, video, ask: askBeforeDownload }),
@@ -165,9 +165,9 @@ async function sendToFetchd(url, referer, video = false, ask = null) {
   }
 }
 
-async function fetchdAlive() {
+async function spoolAlive() {
   try {
-    const res = await fetch(`${FETCHD}/ping`);
+    const res = await fetch(`${SPOOL}/ping`);
     return res.ok;
   } catch { return false; }
 }

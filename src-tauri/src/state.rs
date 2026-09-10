@@ -34,7 +34,7 @@ pub struct Settings {
     /// Netscape `cookies.txt` exported from a browser.
     ///
     /// The only way past an interactive anti-bot challenge: the browser solves
-    /// it, and fetchd replays the cookie it earned. Header spoofing and TLS
+    /// it, and spool replays the cookie it earned. Header spoofing and TLS
     /// fingerprint impersonation both fail against a managed challenge.
     pub cookies_file: Option<PathBuf>,
     /// Must match the browser the cookies came from — a `cf_clearance` cookie
@@ -73,7 +73,7 @@ pub struct Settings {
     /// who never asked for it.
     #[serde(default = "yes")]
     pub run_in_background: bool,
-    /// Start fetchd with the desktop session. Written to the desktop's
+    /// Start spool with the desktop session. Written to the desktop's
     /// autostart entry, so it is real state on disk rather than a preference
     /// we consult.
     ///
@@ -285,7 +285,7 @@ impl AppState {
             if let Ok(parsed) = reqwest::Url::parse(url) {
                 match cookies::load(path) {
                     Ok(jar) => session.cookie = cookies::header_for(&jar, &parsed),
-                    Err(e) => eprintln!("fetchd: {e}"),
+                    Err(e) => eprintln!("spool: {e}"),
                 }
             }
         }
@@ -491,14 +491,14 @@ impl AppState {
     pub fn save_queue(&self) {
         let snapshot = self.queue.lock().unwrap().clone();
         if let Err(e) = queue::save_json(&self.data_dir.join("queue.json"), &snapshot) {
-            eprintln!("fetchd: could not save queue: {e}");
+            eprintln!("spool: could not save queue: {e}");
         }
     }
 
     fn save_settings(&self) {
         let snapshot = self.settings.lock().unwrap().clone();
         if let Err(e) = queue::save_json(&self.config_dir.join("settings.json"), &snapshot) {
-            eprintln!("fetchd: could not save settings: {e}");
+            eprintln!("spool: could not save settings: {e}");
         }
     }
 
@@ -1264,7 +1264,7 @@ mod tests {
     use crate::download::DownloadPlan;
 
     fn app() -> AppState {
-        let dir = std::env::temp_dir().join(format!("fetchd-state-{}", uid()));
+        let dir = std::env::temp_dir().join(format!("spool-state-{}", uid()));
         std::fs::create_dir_all(&dir).unwrap();
         AppState::new(dir.clone(), dir).unwrap()
     }
@@ -1311,7 +1311,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("fetchd-{name}-{}", uid()));
+        let dir = std::env::temp_dir().join(format!("spool-{name}-{}", uid()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -1784,7 +1784,7 @@ mod tests {
     #[test]
     fn rename_moves_the_file_on_disk() {
         let state = app();
-        let dir = std::env::temp_dir().join(format!("fetchd-rename-{}", uid()));
+        let dir = std::env::temp_dir().join(format!("spool-rename-{}", uid()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let plan = DownloadPlan {
@@ -1966,7 +1966,7 @@ mod tests {
     #[test]
     fn remove_keeps_or_deletes_file() {
         let state = app();
-        let dir = std::env::temp_dir().join(format!("fetchd-rm-{}", uid()));
+        let dir = std::env::temp_dir().join(format!("spool-rm-{}", uid()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("keep.bin");
         std::fs::write(&file, b"data").unwrap();

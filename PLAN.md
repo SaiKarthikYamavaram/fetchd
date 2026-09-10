@@ -1,4 +1,4 @@
-# fetchd — Personal Internet Download Manager
+# spool — Personal Internet Download Manager
 
 ## Context
 
@@ -11,7 +11,7 @@ A second [IMPROVEMENTS.md](file:///home/logan/Projects/idm/IMPROVEMENTS.md) pass
 ## Stack
 
 - **Tauri v2** (Rust backend) + **React + TypeScript + Vite** frontend (standard `create-tauri-app` template)
-- App name: **fetchd**, bundle id `com.saikarthik.fetchd`
+- App name: **spool**, bundle id `com.saikarthik.spool`
 - Cross-platform target (Linux/Mac/Windows), dev/test on Arch Linux
 
 ## Settled scope
@@ -72,7 +72,7 @@ A second [IMPROVEMENTS.md](file:///home/logan/Projects/idm/IMPROVEMENTS.md) pass
 cd /home/logan/Projects
 npm create tauri-app@latest idm -- --template react-ts --manager npm
 ```
-Prompts: app name `fetchd`, identifier `com.saikarthik.fetchd`.
+Prompts: app name `spool`, identifier `com.saikarthik.spool`.
 
 Rust deps to add (`src-tauri/Cargo.toml`): `reqwest` (features `stream`,`json` — **not** `gzip`/`brotli`), `tokio` (`full`), `tokio-util` (feature `rt`, for `CancellationToken`), `futures-util` (`StreamExt` for `bytes_stream()`), `serde_json`, `tauri-plugin-single-instance`, `tauri-plugin-dialog`, `tauri-plugin-opener`, `tauri-plugin-notification`, `fs4` (features `["tokio"]` — disk-space check + physical pre-allocation).
 
@@ -81,7 +81,7 @@ Frontend: no state library needed — `useState`/`useReducer` + Tauri event list
 ### Tauri v2 project shape
 - Standard v2 layout puts the app builder in `src-tauri/src/lib.rs` (`pub fn run()`); `main.rs` is a thin wrapper:
   ```rust
-  fn main() { fetchd_lib::run(); }
+  fn main() { spool_lib::run(); }
   ```
   All modules below are registered from `lib.rs`, not `main.rs`.
 - **Capabilities must be granted explicitly** — Tauri v2 plugins have no implicit frontend access. `src-tauri/capabilities/default.json`:
@@ -89,7 +89,7 @@ Frontend: no state library needed — `useState`/`useReducer` + Tauri event list
   {
     "$schema": "../gen/schemas/desktop-schema.json",
     "identifier": "default",
-    "description": "Default capabilities for fetchd",
+    "description": "Default capabilities for spool",
     "windows": ["main"],
     "permissions": ["core:default", "dialog:default", "opener:default", "notification:default"]
   }
@@ -109,7 +109,7 @@ Frontend: no state library needed — `useState`/`useReducer` + Tauri event list
 Flat, no premature abstraction — single download strategy (segmented-with-fallback), not pluggable, so no `trait Downloader`.
 
 - `lib.rs` — Tauri builder (`run()`): plugin registration, capabilities, tray setup, `on_window_event` close-to-tray, command registration
-- `main.rs` — thin wrapper calling `fetchd_lib::run()`
+- `main.rs` — thin wrapper calling `spool_lib::run()`
 - `state.rs` — `AppState` (queue + settings + throttle semaphore, in `tauri::State`), atomic JSON load/save. **Lock rule: per-segment progress is `Arc<AtomicU64>` (lock-free hot path); queue metadata sits behind a `std::sync::Mutex` and no `.await` ever happens under the guard** — parking while holding it deadlocks the executor. EMA speed state lives inside the ticker task, which is its only reader/writer, so it needs no synchronization at all.
 - `download.rs` — the engine: HEAD check w/ `Range: bytes=0-0` fallback, `http1_only()` segment client, `fs4::allocate` pre-allocation + seek-write segments, strict 206 validation w/ single-connection downgrade, filename extraction/sanitize/collision, retry/backoff, `CancellationToken` wiring, `AtomicU64` progress counters, ETag/Last-Modified check on resume
 - `queue.rs` — `Download` struct + status enum (`Queued|Downloading|Paused|Interrupted|Completed|Failed`), add/remove/pause/resume/cancel ops, dup-check, scheme validation

@@ -1084,30 +1084,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fetchd"
-version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "fs4",
- "futures-util",
- "libc",
- "reqwest",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "tauri-plugin-window-state",
- "tiny_http",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
 name = "field-offset"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3764,6 +3740,30 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
+]
+
+[[package]]
+name = "spool"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "fs4",
+ "futures-util",
+ "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-window-state",
+ "tiny_http",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

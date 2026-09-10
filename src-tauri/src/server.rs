@@ -4,7 +4,7 @@
 //! interactive anti-bot challenge: it does not solve the challenge, the
 //! browser does. The extension watches for a download, reads the cookies the
 //! browser already holds for that site (including whatever `cf_clearance` it
-//! earned), and POSTs the URL plus that session here. fetchd then replays a
+//! earned), and POSTs the URL plus that session here. spool then replays a
 //! session the browser established.
 //!
 //! `tiny_http` on a dedicated thread rather than the Tokio runtime: the server
@@ -56,11 +56,11 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
         let server = match Server::http(addr) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("fetchd: extension bridge disabled, cannot bind 127.0.0.1:{PORT}: {e}");
+                eprintln!("spool: extension bridge disabled, cannot bind 127.0.0.1:{PORT}: {e}");
                 return;
             }
         };
-        eprintln!("fetchd: extension bridge listening on 127.0.0.1:{PORT}");
+        eprintln!("spool: extension bridge listening on 127.0.0.1:{PORT}");
 
         // A bounded pool rather than a thread per request: "download all links"
         // fires one POST per link, and any local process can hit this endpoint,
@@ -100,9 +100,9 @@ pub fn start(app: AppHandle, state: Arc<AppState>) {
                 (Method::Options, _) => {
                     let _ = request.respond(cors(Response::empty(204)));
                 }
-                // Health check so the extension can tell whether fetchd is up.
+                // Health check so the extension can tell whether spool is up.
                 (Method::Get, "/ping") => {
-                    let _ = request.respond(cors(Response::from_string("fetchd")));
+                    let _ = request.respond(cors(Response::from_string("spool")));
                 }
                 (Method::Post, "/add") => {
                     let mut body = String::new();
@@ -175,7 +175,7 @@ fn handle_add(app: &AppHandle, state: &Arc<AppState>, body: &str) -> Result<Stri
 /// The extension sends empty strings for headers it could not read, and an
 /// empty `Cookie:` or `Referer:` header is worse than none — some hosts treat
 /// it as a malformed request — so blanks become `None`. A missing agent falls
-/// back to fetchd's default rather than sending none at all.
+/// back to spool's default rather than sending none at all.
 fn session_from(req: &AddRequest) -> Session {
     Session {
         user_agent: req

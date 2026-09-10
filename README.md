@@ -1,4 +1,4 @@
-# fetchd
+# spool
 
 A download manager for Linux, in the spirit of Internet Download Manager: it
 splits a file across several connections, picks downloads up where they
@@ -27,7 +27,7 @@ per-download or global; the container is left to yt-dlp.
 own downloads, grabs every link or image, and sends the page's video straight
 to yt-dlp. Every hand-off carries the cookies the browser already holds, which
 is the only way past an interactive anti-bot challenge: the browser solves it,
-fetchd replays the result.
+spool replays the result.
 
 **The rest.** Bandwidth cap, proxy, per-type folders, rename on disk,
 multi-select with bulk actions, poster frames extracted from finished video,
@@ -58,7 +58,7 @@ npm run tauri build
 ./install.sh
 ```
 
-That puts the binary in `~/.local/bin/fetchd`, a desktop entry in
+That puts the binary in `~/.local/bin/spool`, a desktop entry in
 `~/.local/share/applications`, and icons under `~/.local/share/icons`. Make
 sure `~/.local/bin` is on your `PATH`.
 
@@ -68,6 +68,16 @@ The AppImage target needs `linuxdeploy` and its GTK plugin on `PATH`; without
 them that one bundle fails and the others still build.
 
 To remove it: `./install.sh --uninstall`.
+
+### Upgrading from `fetchd`
+
+This was called `fetchd` until it was renamed. Nothing to do by hand:
+`install.sh` removes the old binary, desktop entry and autostart entry, and the
+first launch moves the queue, settings and thumbnail cache from
+`com.saikarthik.fetchd` to `com.saikarthik.spool`. Nothing is overwritten, so
+launching twice is a no-op. What stays behind at the old path is WebKit's own
+cache, which you can delete. Re-load the extension from `extension/` to pick up
+the new name.
 
 ### The browser extension
 
@@ -88,7 +98,7 @@ extension leaves the download to the browser rather than losing it.
 **Sites that answer `403`.** Some hosts sit behind an interactive challenge.
 No download manager can solve one — not this, not IDM. What IDM actually does
 is let the browser solve it and reuse that session, and so does this. Either
-use the extension, or export a `cookies.txt` and point fetchd at it. The
+use the extension, or export a `cookies.txt` and point spool at it. The
 User-Agent in settings must match the browser the cookies came from: a
 `cf_clearance` cookie is bound to the exact agent that earned it.
 
@@ -116,7 +126,7 @@ cd src-tauri && cargo test          # backend
 cd src-tauri && cargo test -- --ignored   # the ones that hit the network
 ```
 
-Tests: 113 Rust unit + 11 network (behind `--ignored`), 89 JS. The network
+Tests: 117 Rust unit + 11 network (behind `--ignored`), 89 JS. The network
 ones are excluded by default because they download real files from a public
 host.
 

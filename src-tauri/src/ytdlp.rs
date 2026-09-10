@@ -1,6 +1,6 @@
 //! Video backend: delegate streaming sites to `yt-dlp`.
 //!
-//! fetchd's own HTTP engine downloads files. Adaptive-streaming sites
+//! spool's own HTTP engine downloads files. Adaptive-streaming sites
 //! (YouTube DASH, HLS) are a different problem: separate audio/video streams,
 //! signed short-lived segment URLs, a per-session cipher, then a mux. `yt-dlp`
 //! solves all of that and supports ~1800 sites, so for those we shell out to it

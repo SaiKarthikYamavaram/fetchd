@@ -4,7 +4,7 @@
 //! the common one). No header combination gets past it: the server wants a
 //! browser to execute a script, and the reward is a cookie such as
 //! `cf_clearance`. Once a browser has earned that cookie, replaying it is
-//! enough — so fetchd does not need to solve challenges, only to be handed
+//! enough — so spool does not need to solve challenges, only to be handed
 //! the result.
 //!
 //! The Netscape format is the lingua franca here: every "export cookies"

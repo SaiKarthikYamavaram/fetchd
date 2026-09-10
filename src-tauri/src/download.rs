@@ -65,7 +65,7 @@ const MAX_REDIRECTS: usize = 10;
 ///
 /// This is the whole mechanism behind getting past an interactive anti-bot
 /// challenge: the browser solves the challenge and earns a cookie (a
-/// `cf_clearance`, say), and fetchd replays that exact session. Because the
+/// `cf_clearance`, say), and spool replays that exact session. Because the
 /// cookie is bound to the `User-Agent` and `Referer` that earned it, all three
 /// travel together. A default session (no cookie, no referer) is the ordinary
 /// case for links that need no authentication.
@@ -219,7 +219,7 @@ fn apply_proxy(builder: reqwest::ClientBuilder, session: &Session) -> reqwest::C
         Some(url) => match reqwest::Proxy::all(url) {
             Ok(proxy) => builder.proxy(proxy),
             Err(e) => {
-                eprintln!("fetchd: ignoring invalid proxy {url}: {e}");
+                eprintln!("spool: ignoring invalid proxy {url}: {e}");
                 builder
             }
         },
@@ -728,7 +728,7 @@ impl Progress {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Engine {
-    /// fetchd's own segmented HTTP engine.
+    /// spool's own segmented HTTP engine.
     #[default]
     Http,
     /// Delegated to yt-dlp (streaming sites).
@@ -1503,7 +1503,7 @@ mod tests {
 
     #[test]
     fn unique_path_suffixes_on_collision() {
-        let dir = std::env::temp_dir().join(format!("fetchd-unique-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("spool-unique-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -1617,7 +1617,7 @@ mod tests {
     async fn allocate_reserves_real_disk_blocks() {
         use std::os::unix::fs::MetadataExt;
 
-        let dir = std::env::temp_dir().join(format!("fetchd-alloc-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("spool-alloc-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("reserved.bin");
         let size: u64 = 4 * 1024 * 1024;
@@ -1674,7 +1674,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("fetchd-net-{name}"));
+        let dir = std::env::temp_dir().join(format!("spool-net-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }

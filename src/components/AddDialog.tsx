@@ -3,7 +3,7 @@ import { api, type AddOptions } from "../lib/api";
 import { IconFolder, IconDownload, IconX } from "./icons";
 import { useEscape } from "../lib/useEscape";
 
-/// Hosts fetchd routes to yt-dlp. Kept in sync with VIDEO_HOSTS in
+/// Hosts spool routes to yt-dlp. Kept in sync with VIDEO_HOSTS in
 /// src-tauri/src/ytdlp.rs — used only to decide whether to offer the quality
 /// picker, so drift just hides an option rather than breaking a download.
 const VIDEO_HOSTS = [

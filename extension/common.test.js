@@ -278,7 +278,7 @@ describe("getSettings", () => {
   });
 });
 
-describe("sendToFetchd", () => {
+describe("sendToSpool", () => {
   function harness(overrides = {}) {
     const calls = [];
     const e = load({
@@ -297,7 +297,7 @@ describe("sendToFetchd", () => {
 
   it("posts the URL with the browser's cookies and agent", async () => {
     const { e, calls } = harness();
-    await expect(e.sendToFetchd("https://e.test/a.zip", "https://e.test/")).resolves.toBe(true);
+    await expect(e.sendToSpool("https://e.test/a.zip", "https://e.test/")).resolves.toBe(true);
     expect(calls[0].url).toBe("http://127.0.0.1:47831/add");
     expect(calls[0].body.cookie).toBe("a=1; b=2");
     expect(calls[0].body.userAgent).toBe("TestAgent/1.0");
@@ -307,20 +307,20 @@ describe("sendToFetchd", () => {
 
   it("takes the ask setting when the caller does not override it", async () => {
     const { e, calls } = harness();
-    await e.sendToFetchd("https://e.test/a.zip", null);
+    await e.sendToSpool("https://e.test/a.zip", null);
     // askBeforeDownload defaults on.
     expect(calls[0].body.ask).toBe(true);
   });
 
   it("lets a batch grab force ask off so 30 links do not open 30 dialogs", async () => {
     const { e, calls } = harness();
-    await e.sendToFetchd("https://e.test/a.zip", null, false, false);
+    await e.sendToSpool("https://e.test/a.zip", null, false, false);
     expect(calls[0].body.ask).toBe(false);
   });
 
   it("forwards the video flag for a manifest or a video site", async () => {
     const { e, calls } = harness();
-    await e.sendToFetchd("https://e.test/live.m3u8", null, true, false);
+    await e.sendToSpool("https://e.test/live.m3u8", null, true, false);
     expect(calls[0].body.video).toBe(true);
   });
 
@@ -331,22 +331,22 @@ describe("sendToFetchd", () => {
         cookies: { getAll: async () => [] },
       },
     });
-    await e.sendToFetchd("https://e.test/a.zip", null);
+    await e.sendToSpool("https://e.test/a.zip", null);
     expect(calls[0].body.cookie).toBeNull();
   });
 
-  it("reports failure instead of throwing when fetchd is not running", async () => {
+  it("reports failure instead of throwing when spool is not running", async () => {
     const { e } = harness({
       fetch: async () => {
         throw new TypeError("Failed to fetch");
       },
     });
-    await expect(e.sendToFetchd("https://e.test/a.zip", null)).resolves.toBe(false);
+    await expect(e.sendToSpool("https://e.test/a.zip", null)).resolves.toBe(false);
   });
 
   it("reports failure on a non-OK reply", async () => {
     const { e } = harness({ fetch: async () => ({ ok: false }) });
-    await expect(e.sendToFetchd("https://e.test/a.zip", null)).resolves.toBe(false);
+    await expect(e.sendToSpool("https://e.test/a.zip", null)).resolves.toBe(false);
   });
 
   it("survives a cookies API that rejects", async () => {
@@ -362,24 +362,24 @@ describe("sendToFetchd", () => {
         },
       },
     });
-    await expect(e.sendToFetchd("https://e.test/a.zip", null)).resolves.toBe(true);
+    await expect(e.sendToSpool("https://e.test/a.zip", null)).resolves.toBe(true);
     expect(calls[0].body.cookie).toBeNull();
   });
 });
 
-describe("fetchdAlive", () => {
+describe("spoolAlive", () => {
   it("is true only when the ping answers", async () => {
     const up = load({ fetch: async () => ({ ok: true }) });
-    await expect(up.fetchdAlive()).resolves.toBe(true);
+    await expect(up.spoolAlive()).resolves.toBe(true);
 
     const refusing = load({
       fetch: async () => {
         throw new TypeError("Failed to fetch");
       },
     });
-    await expect(refusing.fetchdAlive()).resolves.toBe(false);
+    await expect(refusing.spoolAlive()).resolves.toBe(false);
 
     const erroring = load({ fetch: async () => ({ ok: false }) });
-    await expect(erroring.fetchdAlive()).resolves.toBe(false);
+    await expect(erroring.spoolAlive()).resolves.toBe(false);
   });
 });

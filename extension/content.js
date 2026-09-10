@@ -5,10 +5,10 @@
 // there is a video worth grabbing, and stays out of the way otherwise.
 
 (() => {
-  if (window.__fetchdPanel) return; // survive re-injection
-  window.__fetchdPanel = true;
+  if (window.__spoolPanel) return; // survive re-injection
+  window.__spoolPanel = true;
 
-  const ID = "fetchd-panel";
+  const ID = "spool-panel";
   let panel = null;
   let hideTimer = null;
 
@@ -123,7 +123,7 @@
     const el = document.createElement("div");
     el.className = "panel";
     el.setAttribute("role", "dialog");
-    el.setAttribute("aria-label", "Download with fetchd");
+    el.setAttribute("aria-label", "Download with spool");
     el.innerHTML =
       `<span class="mark">${GLYPH}</span>` +
       `<span class="label"></span>` +
@@ -136,7 +136,7 @@
       e.stopPropagation();
       remove();
       // Don't nag again for this page view.
-      window.__fetchdDismissed = true;
+      window.__spoolDismissed = true;
     });
 
     root.append(style, el);
@@ -150,13 +150,13 @@
   }
 
   function show(label, onClick) {
-    if (window.__fetchdDismissed) return;
+    if (window.__spoolDismissed) return;
     if (!panel) {
       panel = build(label);
       panel.el.addEventListener("click", async () => {
         panel.text.textContent = "Sending…";
         const ok = await onClick();
-        panel.text.textContent = ok ? "Sent to fetchd" : "fetchd not running";
+        panel.text.textContent = ok ? "Sent to spool" : "spool not running";
         hideTimer = setTimeout(remove, 2500);
       });
       document.documentElement.appendChild(panel.host);

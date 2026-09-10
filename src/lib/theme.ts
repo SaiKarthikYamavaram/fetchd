@@ -9,4 +9,13 @@ export function applyTheme(theme: string | undefined) {
   } else {
     delete root.dataset.theme;
   }
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      if (theme) {
+        window.localStorage.setItem("spool_theme", theme);
+      } else {
+        window.localStorage.removeItem("spool_theme");
+      }
+    }
+  } catch {}
 }

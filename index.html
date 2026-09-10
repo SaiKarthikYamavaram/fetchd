@@ -11,17 +11,26 @@
       rel="stylesheet"
     />
     <title>spool</title>
+    <script>
+      (function () {
+        try {
+          const t = localStorage.getItem("spool_theme");
+          if (t === "light") {
+            document.documentElement.dataset.theme = "light";
+          } else {
+            document.documentElement.dataset.theme = "dark";
+          }
+        } catch (e) {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
     <style>
       :root {
-        --loader-bg: #ffffff;
-      }
-      @media (prefers-color-scheme: dark) {
-        :root:not([data-theme="light"]) {
-          --loader-bg: #09090b;
-        }
-      }
-      :root[data-theme="dark"] {
         --loader-bg: #09090b;
+      }
+      :root[data-theme="light"] {
+        --loader-bg: #ffffff;
       }
       html, body {
         margin: 0;

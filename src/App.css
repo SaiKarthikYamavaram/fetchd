@@ -340,7 +340,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); }
 /* ── Content ────────────────────────────────────────────────────────────── */
 .content { max-width: 830px; margin: 0 auto; padding: 20px 22px 56px; }
 
-.add { display: flex; gap: 10px; margin-bottom: 16px; }
+.add { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 
 .add input {
   flex: 1;
@@ -535,21 +535,21 @@ input[type="checkbox"]:focus-visible {
 .search {
   display: flex;
   align-items: center;
-  gap: 7px;
-  width: 150px;
-  height: 30px;
-  padding: 0 6px 0 11px;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  height: 42px;
+  padding: 0 8px 0 14px;
   color: var(--faint);
-  background: var(--surface-2);
-  border: 1px solid transparent;
-  border-radius: 999px;
+  background: var(--field);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
   cursor: text;
-  transition: width 0.25s var(--ease), border-color 0.2s var(--ease),
-              box-shadow 0.2s var(--ease), color 0.2s var(--ease);
+  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease),
+              color 0.2s var(--ease);
 }
 .search:hover { color: var(--muted); }
 .search:focus-within {
-  width: 220px;
   color: var(--accent-text);
   border-color: var(--accent);
   box-shadow: var(--ring);
@@ -559,7 +559,7 @@ input[type="checkbox"]:focus-visible {
   min-width: 0;
   padding: 0;
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13.5px;
   color: var(--fg);
   background: none;
   border: none;
@@ -570,8 +570,8 @@ input[type="checkbox"]:focus-visible {
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   color: var(--muted);
   background: none;

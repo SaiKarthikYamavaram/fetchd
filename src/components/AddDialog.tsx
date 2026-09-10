@@ -36,6 +36,15 @@ export function suggestedName(url: string): string {
 
 /// The pre-download dialog: choose where the file lands and how it is fetched
 /// before anything starts, instead of silently using the defaults.
+/// Split a pasted blob into links. Whitespace-separated with comments skipped,
+/// so the same text that works in the Import box works here too.
+function splitUrls(text: string): string[] {
+  return text
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s && !s.startsWith("#"));
+}
+
 export function AddDialog({
   url,
   token,
@@ -49,6 +58,10 @@ export function AddDialog({
   onClose: () => void;
   onAdded: (msg: string | null) => void;
 }) {
+  // A URL the extension parked is fixed — that is the request being confirmed.
+  // One typed by hand is the whole point of the dialog, so it stays editable.
+  const locked = Boolean(token);
+  const [value, setValue] = useState(url);
   const [dir, setDir] = useState("");
   const [name, setName] = useState("");
   const [quality, setQuality] = useState("");
@@ -56,7 +69,10 @@ export function AddDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const video = isVideoUrl(url);
+  const links = splitUrls(value);
+  const batch = links.length > 1;
+  const one = links[0] ?? "";
+  const video = isVideoUrl(one);
 
   // Escape must go through dismiss so a parked extension request is released.
   useEscape(() => {
@@ -92,19 +108,40 @@ export function AddDialog({
 
     const options: AddOptions = {
       dir: dir.trim() || null,
-      name: name.trim() || null,
+      // A filename is a single-download answer; a batch takes the server's.
+      name: batch ? null : name.trim() || null,
       quality: video && quality ? quality : null,
       start,
     };
 
     try {
-      const dup = await api.isDuplicate(url);
       if (token) {
+        const dup = await api.isDuplicate(one);
         await api.addPending(token, options);
+        onAdded(dup ? "Already in the queue — added again." : null);
+      } else if (batch) {
+        // Queued one at a time rather than through import_urls, so the folder
+        // and the start-now choice apply to every link in the batch.
+        const failed: string[] = [];
+        for (const link of links) {
+          try {
+            await api.addDownload(link, options);
+          } catch {
+            failed.push(link);
+          }
+        }
+        const added = links.length - failed.length;
+        if (added === 0) throw new Error("None of those links could be added.");
+        onAdded(
+          failed.length
+            ? `Added ${added} of ${links.length}. ${failed.length} skipped.`
+            : `Added ${added} downloads.`,
+        );
       } else {
-        await api.addDownload(url, options);
+        const dup = await api.isDuplicate(one);
+        await api.addDownload(one, options);
+        onAdded(dup ? "Already in the queue — added again." : null);
       }
-      onAdded(dup ? "Already in the queue — added again." : null);
       onClose();
     } catch (e) {
       setError(String(e));
@@ -123,8 +160,15 @@ export function AddDialog({
         </div>
 
         <label className="field">
-          <span>URL</span>
-          <input value={url} readOnly spellCheck={false} />
+          <span>{batch ? `${links.length} links` : "URL"}</span>
+          <input
+            value={value}
+            onChange={(e) => setValue(e.currentTarget.value)}
+            readOnly={locked}
+            placeholder="https://…  — or paste several at once"
+            spellCheck={false}
+            autoFocus={!locked}
+          />
         </label>
 
         <label className="field">
@@ -145,18 +189,25 @@ export function AddDialog({
         <label className="field">
           <span>Save as</span>
           <input
-            value={name}
+            value={batch ? "" : name}
             onChange={(e) => setName(e.currentTarget.value)}
             // A video URL's last path segment is routing ("watch", "video"),
             // never a filename — yt-dlp names it from the title instead.
-            placeholder={(video ? "" : suggestedName(url)) || "Automatic"}
+            placeholder={
+              batch
+                ? "One name cannot cover several links"
+                : (video ? "" : suggestedName(one)) || "Automatic"
+            }
             spellCheck={false}
+            disabled={batch}
           />
         </label>
         <p className="help">
-          {video
-            ? "Leave blank to use the video's title. The container is picked by yt-dlp."
-            : "Leave blank to use the server's name. Without an extension, the source's is kept."}
+          {batch
+            ? "Every link goes to the folder above and keeps the name its server gives it."
+            : video
+              ? "Leave blank to use the video's title. The container is picked by yt-dlp."
+              : "Leave blank to use the server's name. Without an extension, the source's is kept."}
         </p>
 
         {video && (
@@ -183,8 +234,15 @@ export function AddDialog({
         {error && <p className="err inline">{error}</p>}
 
         <div className="modal-actions">
-          <button type="submit" className="btn primary" disabled={busy}>
-            <IconDownload /> {busy ? "Adding…" : start ? "Download" : "Add paused"}
+          <button type="submit" className="btn primary" disabled={busy || links.length === 0}>
+            <IconDownload />{" "}
+            {busy
+              ? "Adding…"
+              : batch
+                ? `Download ${links.length}`
+                : start
+                  ? "Download"
+                  : "Add paused"}
           </button>
           <button type="button" className="btn" onClick={dismiss}>Cancel</button>
         </div>

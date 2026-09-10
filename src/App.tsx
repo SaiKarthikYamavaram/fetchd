@@ -43,7 +43,6 @@ const STATUS_LABEL: Record<Status, string> = {
 
 function App() {
   const [rows, setRows] = useState<DownloadView[]>([]);
-  const [url, setUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -60,7 +59,6 @@ function App() {
   // Name filter. Narrows whatever the status pills already picked.
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
-  const urlRef = useRef<HTMLInputElement>(null);
   // Set when the delete dialog is confirming the whole selection.
   const [deletingSelection, setDeletingSelection] = useState(false);
   // URL awaiting confirmation in the add dialog (location, quality, start).
@@ -146,36 +144,6 @@ function App() {
     };
   }, [refresh, scheduleRender]);
 
-  /// A list pasted into the box is a batch, not one download: the add dialog
-  /// asks for a folder and a filename, and neither answer fits ten links. One
-  /// URL opens the dialog; several are queued straight away.
-  async function add(e: React.FormEvent) {
-    e.preventDefault();
-    const value = url.trim();
-    if (!value) return;
-    setError(null);
-    setNotice(null);
-
-    const lines = value.split(/\s+/).filter(Boolean);
-    if (lines.length === 1) {
-      setPendingUrl(value);
-      return;
-    }
-
-    try {
-      const skipped = await api.importUrls(value);
-      const added = lines.length - skipped.length;
-      setUrl("");
-      setNotice(
-        skipped.length
-          ? `Added ${added} of ${lines.length}. ${skipped.length} skipped.`
-          : `Added ${added} downloads.`,
-      );
-    } catch (err) {
-      setError(String(err));
-    }
-  }
-
   async function importText() {
     const text = prompt("Paste one URL per line:");
     if (!text) return;
@@ -248,7 +216,9 @@ function App() {
     setSelected(selection.EMPTY);
   }, []);
 
-  const modalOpen = Boolean(detailId || deleteId || renameId || pendingUrl || deletingSelection);
+  const modalOpen = Boolean(
+    detailId || deleteId || renameId || pendingUrl !== null || deletingSelection,
+  );
 
   // Window-level shortcuts. Nothing fires while a modal is up — each dialog
   // owns its own keys — and the list keys stay out of the way while the caret
@@ -360,19 +330,36 @@ function App() {
       <main className="content">
         {showSettings && <SettingsView />}
 
-        <form className="add" onSubmit={add}>
-          <input
-            value={url}
-            onChange={(e) => setUrl(e.currentTarget.value)}
-            placeholder="Paste a link, or send one from the browser extension…"
-            spellCheck={false}
-            ref={urlRef}
-            autoFocus
-          />
-          <button className="add-btn" type="submit" disabled={!url.trim()}>
-            Add
+        {/* The widest field on the screen belongs to the thing done most
+            often. Adding is a deliberate act with several answers to give, so
+            it opens the dialog that asks for them. */}
+        <div className="add">
+          <label className="search" title="Filter by name or URL">
+            <IconSearch size={16} />
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.currentTarget.value)}
+              placeholder="Search downloads…"
+              spellCheck={false}
+              aria-label="Filter downloads"
+              autoFocus
+            />
+            {query && (
+              <button
+                type="button"
+                className="search-clear"
+                onClick={() => { setQuery(""); searchRef.current?.focus(); }}
+                title="Clear filter"
+              >
+                <IconX size={14} />
+              </button>
+            )}
+          </label>
+          <button className="add-btn" type="button" onClick={() => setPendingUrl("")}>
+            <IconDownload size={15} /> Add
           </button>
-        </form>
+        </div>
 
         {notice && <div className="toast notice">{notice}</div>}
         {error && <div className="toast err">{error}</div>}
@@ -423,27 +410,6 @@ function App() {
                   pills it replaces — not from the toolbar, which is for actions
                   on the app rather than on the list. */}
               <div className="strip-right">
-                <label className="search" title="Filter by name or URL">
-                  <IconSearch size={14} />
-                  <input
-                    ref={searchRef}
-                    value={query}
-                    onChange={(e) => setQuery(e.currentTarget.value)}
-                    placeholder="Search"
-                    spellCheck={false}
-                    aria-label="Filter downloads"
-                  />
-                  {query && (
-                    <button
-                      type="button"
-                      className="search-clear"
-                      onClick={() => { setQuery(""); searchRef.current?.focus(); }}
-                      title="Clear filter"
-                    >
-                      <IconX size={13} />
-                    </button>
-                  )}
-                </label>
                 <button
                   className="strip-btn"
                   onClick={() => setSelectMode(true)}
@@ -513,7 +479,7 @@ function App() {
       {renameRow && (
         <RenameDialog row={renameRow} onClose={() => setRenameId(null)} />
       )}
-      {pendingUrl && (
+      {pendingUrl !== null && (
         <AddDialog
           url={pendingUrl}
           token={pendingToken}
@@ -522,7 +488,6 @@ function App() {
             setPendingToken(null);
           }}
           onAdded={(msg) => {
-            setUrl("");
             if (msg) setNotice(msg);
           }}
         />

@@ -55,7 +55,8 @@ const QUEUE_TITLE: Record<QueueFilter, string> = {
   failed: "Failed",
 };
 
-const CATEGORY_TITLE: Record<Category, string> = {
+const CATEGORY_TITLE: Record<Category | "all", string> = {
+  all: "All",
   media: "Media",
   documents: "Documents",
   archives: "Archives",
@@ -246,24 +247,6 @@ function App() {
   const downloading = active.filter((r) => r.status === "downloading");
   const totalSpeed = downloading.reduce((s, r) => s + (samples.current.get(r.id)?.speed ?? 0), 0);
 
-  // Sidebar badge counts. Each is independent of the other filter axis and
-  // of the search box — a faceted count, not a running total of what's on
-  // screen right now.
-  const queueCounts: Record<QueueFilter, number> = {
-    all: rows.length,
-    active: active.length,
-    completed: completed.length,
-    paused: paused.length,
-    failed: failed.length,
-  };
-  const categoryCounts: Record<Category, number> = {
-    media: rows.filter((r) => categoryOf(r.filename) === "media").length,
-    documents: rows.filter((r) => categoryOf(r.filename) === "documents").length,
-    archives: rows.filter((r) => categoryOf(r.filename) === "archives").length,
-    other: rows.filter((r) => categoryOf(r.filename) === "other").length,
-  };
-  const sidebarCounts = { ...queueCounts, ...categoryCounts };
-
   const queueRows = useMemo(() => {
     switch (queue) {
       case "active": return active;
@@ -276,6 +259,33 @@ function App() {
     // render, so depending on `rows` alone keeps this in sync with them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, rows]);
+
+  const categoryRows = useMemo(() => {
+    if (category === "all") return rows;
+    return rows.filter((r) => categoryOf(r.filename) === category);
+  }, [category, rows]);
+
+  // Sidebar badge counts are contextual:
+  // - Queue counts reflect items within the selected category.
+  // - Category counts reflect items within the selected queue status.
+  // When either filter is "all", it seamlessly displays the total counts.
+  const queueCounts: Record<QueueFilter, number> = useMemo(() => ({
+    all: categoryRows.length,
+    active: categoryRows.filter((r) => r.status === "downloading" || r.status === "queued").length,
+    completed: categoryRows.filter((r) => r.status === "completed").length,
+    paused: categoryRows.filter((r) => r.status === "paused" || r.status === "interrupted").length,
+    failed: categoryRows.filter((r) => r.status === "failed").length,
+  }), [categoryRows]);
+
+  const categoryCounts: Record<Category | "all", number> = useMemo(() => ({
+    all: queueRows.length,
+    media: queueRows.filter((r) => categoryOf(r.filename) === "media").length,
+    documents: queueRows.filter((r) => categoryOf(r.filename) === "documents").length,
+    archives: queueRows.filter((r) => categoryOf(r.filename) === "archives").length,
+    other: queueRows.filter((r) => categoryOf(r.filename) === "other").length,
+  }), [queueRows]);
+
+  const sidebarCounts = { ...queueCounts, ...categoryCounts };
 
   const visible = useMemo(() => {
     const byCategory = category === "all"
@@ -399,7 +409,7 @@ function App() {
 
       <Sidebar
         queue={queue}
-        onQueue={(q) => { setQueue(q); setShowSettings(false); }}
+        onQueue={(q) => { setQueue(q); if (q === "all") setCategory("all"); setShowSettings(false); }}
         category={category}
         onCategory={(c) => { setCategory(c); setShowSettings(false); }}
         counts={sidebarCounts}
@@ -416,10 +426,23 @@ function App() {
         {showSettings ? (
           <SettingsView />
         ) : (
-          <>
+          <div className="mx-auto max-w-5xl w-full">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h1 className="text-lg font-semibold">{title}</h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-lg font-semibold">{title}</h1>
+                  {narrowed && (
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="h-5 gap-1 rounded-full px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                      onClick={() => { setQueue("all"); setCategory("all"); }}
+                      title="Clear filter"
+                    >
+                      <X className="size-3" /> Reset
+                    </Button>
+                  )}
+                </div>
                 <p className="text-sm text-muted-foreground">
                   {visible.length} {visible.length === 1 ? "item" : "items"}
                 </p>
@@ -555,13 +578,23 @@ function App() {
                   <p className="font-medium">
                     {query
                       ? "Nothing matches that"
-                      : `No downloads ${narrowed ? "here" : "yet"}`}
+                      : narrowed && rows.length > 0
+                        ? "No downloads match this filter"
+                        : "No downloads yet"}
                   </p>
                   <p className="max-w-sm text-sm text-muted-foreground">
                     {query ? (
                       <>
                         No download matches <strong>{query}</strong>. Clear the filter, or try
                         part of a URL.
+                      </>
+                    ) : narrowed && rows.length > 0 ? (
+                      <>
+                        There {rows.length === 1 ? "is" : "are"}{" "}
+                        <strong>
+                          {rows.length} {rows.length === 1 ? "download" : "downloads"}
+                        </strong>{" "}
+                        in other categories or queues.
                       </>
                     ) : (
                       <>
@@ -571,10 +604,50 @@ function App() {
                       </>
                     )}
                   </p>
+                  {query ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2"
+                      onClick={() => setQuery("")}
+                    >
+                      Clear search
+                    </Button>
+                  ) : narrowed && rows.length > 0 ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2"
+                      onClick={() => {
+                        setQueue("all");
+                        setCategory("all");
+                        setQuery("");
+                      }}
+                    >
+                      Show all downloads ({rows.length})
+                    </Button>
+                  ) : (
+                    <div className="mt-2 flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => { setPendingMulti(false); setPendingUrl(""); }}
+                      >
+                        <Plus /> Add download
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => { setPendingMulti(true); setPendingUrl(""); }}
+                      >
+                        <Download /> Import batch
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-          </>
+          </div>
         )}
       </main>
 
@@ -694,8 +767,8 @@ function Row({
   return (
     <Card
       className={cn(
-        "flex-row items-center gap-3 bg-card/70 p-3 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:shadow-lg",
-        selected ? "border-primary bg-accent/40" : "hover:border-primary/40",
+        "flex-row items-center gap-3 bg-card/75 p-3 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:shadow-lg dark:hover:shadow-primary/5",
+        selected ? "border-primary bg-accent/40" : "hover:border-primary/50",
         selectMode && "cursor-pointer",
       )}
       // In selection mode the whole row is the target, so the tile is an
@@ -766,7 +839,7 @@ function Row({
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="truncate text-sm font-medium" title={row.url}>{row.filename}</span>
             {domain && (
-              <span className="shrink-0 truncate rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground/80 max-w-24">
+              <span className="shrink-0 truncate rounded-full bg-muted/80 px-2 py-0.5 text-[10px] font-mono text-muted-foreground max-w-36">
                 {domain}
               </span>
             )}
@@ -791,7 +864,7 @@ function Row({
           <span className="flex items-center gap-2">
             {running && (
               <span className="flex items-center gap-2 font-mono tabular-nums">
-                <span>{formatBytes(speed)}/s</span>
+                <span className="font-medium text-primary">↓ {formatBytes(speed)}/s</span>
                 {eta && <span>{eta} left</span>}
                 {row.segments > 1 && <span>{row.segments} conns</span>}
               </span>

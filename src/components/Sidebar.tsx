@@ -1,5 +1,5 @@
 import {
-  Archive, CircleAlert, CircleCheckBig, FileText, Inbox, Monitor, Moon,
+  Archive, CircleAlert, CircleCheckBig, FileText, Inbox, LayoutGrid, Monitor, Moon,
   MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pause, Settings, Sun, Video, Zap,
 } from "lucide-react";
 import type { Category } from "../lib/filetype";
@@ -10,15 +10,16 @@ import { cn } from "cn";
 
 export type QueueFilter = "all" | "active" | "completed" | "paused" | "failed";
 
-const QUEUES: { id: QueueFilter; label: string; icon: React.ReactNode; dot: string }[] = [
-  { id: "all", label: "All", icon: <Inbox className="size-4" />, dot: "bg-muted-foreground" },
-  { id: "active", label: "Active", icon: <Zap className="size-4" />, dot: "bg-primary" },
-  { id: "completed", label: "Completed", icon: <CircleCheckBig className="size-4" />, dot: "bg-emerald-500" },
-  { id: "paused", label: "Paused", icon: <Pause className="size-4" />, dot: "bg-amber-500" },
-  { id: "failed", label: "Failed", icon: <CircleAlert className="size-4" />, dot: "bg-destructive" },
+const QUEUES: { id: QueueFilter; label: string; icon: React.ReactNode }[] = [
+  { id: "all", label: "All", icon: <Inbox className="size-4" /> },
+  { id: "active", label: "Active", icon: <Zap className="size-4" /> },
+  { id: "completed", label: "Completed", icon: <CircleCheckBig className="size-4" /> },
+  { id: "paused", label: "Paused", icon: <Pause className="size-4" /> },
+  { id: "failed", label: "Failed", icon: <CircleAlert className="size-4" /> },
 ];
 
-const CATEGORIES: { id: Category; label: string; icon: React.ReactNode }[] = [
+const CATEGORIES: { id: Category | "all"; label: string; icon: React.ReactNode }[] = [
+  { id: "all", label: "All", icon: <LayoutGrid className="size-4" /> },
   { id: "media", label: "Media", icon: <Video className="size-4" /> },
   { id: "documents", label: "Documents", icon: <FileText className="size-4" /> },
   { id: "archives", label: "Archives", icon: <Archive className="size-4" /> },
@@ -43,7 +44,7 @@ export function Sidebar({
   onQueue: (q: QueueFilter) => void;
   category: Category | "all";
   onCategory: (c: Category | "all") => void;
-  counts: Record<QueueFilter, number> & Record<Category, number>;
+  counts: Record<QueueFilter, number> & Record<Category | "all", number>;
   totalSpeed: number;
   showSettings: boolean;
   onToggleSettings: () => void;
@@ -96,7 +97,7 @@ export function Sidebar({
               icon={c.icon}
               label={c.label}
               count={counts[c.id]}
-              onClick={() => onCategory(category === c.id ? "all" : c.id)}
+              onClick={() => onCategory(c.id)}
             />
           ))}
         </div>
@@ -158,7 +159,9 @@ function NavButton({
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
         collapsed && "justify-center px-0",
-        active ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground",
+        active
+          ? "bg-primary/10 font-medium text-primary"
+          : "text-muted-foreground hover:bg-accent hover:text-foreground",
       )}
     >
       <span className="shrink-0">{icon}</span>

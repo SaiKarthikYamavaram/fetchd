@@ -19,7 +19,7 @@ import { AddDialog } from "./components/AddDialog";
 import {
   IconArchive, IconDisc, IconDoc, IconDownload, IconFile,
   IconFolder, IconImage, IconImport, IconMusic, IconOpen, IconPause, IconPlay,
-  IconEdit, IconRetry, IconSettings, IconTrash, IconVideo,
+  IconEdit, IconRetry, IconSelect, IconSettings, IconTrash, IconVideo,
 } from "./components/icons";
 import { Spinner, Dots } from "./components/Loaders";
 import "./App.css";
@@ -53,6 +53,9 @@ function App() {
   // Multi-select. Kept as ids rather than rows so it survives queue snapshots.
   // The rules (range extension, select-all, pruning) live in lib/selection.
   const [selected, setSelected] = useState<selection.Selection>(selection.EMPTY);
+  // Selection is a mode, entered from the toolbar. Outside it the list carries
+  // no checkboxes at all and a row click opens its details as usual.
+  const [selectMode, setSelectMode] = useState(false);
   // Set when the delete dialog is confirming the whole selection.
   const [deletingSelection, setDeletingSelection] = useState(false);
   // URL awaiting confirmation in the add dialog (location, quality, start).
@@ -204,6 +207,24 @@ function App() {
     setSelected(selection.EMPTY);
   }
 
+  /// Leaving the mode drops the selection with it: a hidden selection that
+  /// reappears next time you enter would act on rows nobody remembers picking.
+  const exitSelectMode = useCallback(() => {
+    setSelectMode(false);
+    setSelected(selection.EMPTY);
+  }, []);
+
+  // Escape is the way out, but only when nothing else owns it — a modal on
+  // screen has its own Escape handler and must win.
+  useEffect(() => {
+    if (!selectMode || detailId || deleteId || renameId || pendingUrl || deletingSelection) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") exitSelectMode();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectMode, detailId, deleteId, renameId, pendingUrl, deletingSelection, exitSelectMode]);
+
   return (
     <div className="app">
       {/* The design's ambient light pools. Purely decorative, so hidden from
@@ -239,6 +260,15 @@ function App() {
             <IconPause />
           </button>
           <button
+            className={`icon-btn ${selectMode ? "active" : ""}`}
+            title={selectMode ? "Leave selection mode (Esc)" : "Select downloads"}
+            aria-pressed={selectMode}
+            onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+            disabled={rows.length === 0}
+          >
+            <IconSelect />
+          </button>
+          <button
             className={`icon-btn ${showSettings ? "active" : ""}`}
             title="Settings"
             onClick={() => setShowSettings((s) => !s)}
@@ -268,24 +298,24 @@ function App() {
         {error && <div className="toast err">{error}</div>}
 
         <div className="filters">
-          <label className="select-all" title={allVisibleSelected ? "Deselect all" : "Select all"}>
-            <input
-              type="checkbox"
-              checked={allVisibleSelected}
-              // Some but not all: the tri-state box only exists as a DOM
-              // property, so it has to be set through a ref callback.
-              ref={(el) => {
-                if (el) el.indeterminate = selectedRows.length > 0 && !allVisibleSelected;
-              }}
-              onChange={toggleAll}
-              disabled={visible.length === 0}
-            />
-          </label>
-          {/* The selection actions take over this row rather than opening a
-              bar of their own below it: same strip, same height, so picking a
-              row never pushes the list down. */}
-          {selectedRows.length > 0 ? (
+          {/* The selection controls take over this strip rather than opening a
+              bar of their own below it: same row, same height, so entering the
+              mode never pushes the list down. */}
+          {selectMode ? (
             <>
+              <label className="select-all" title={allVisibleSelected ? "Deselect all" : "Select all"}>
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  // Some but not all: the tri-state box only exists as a DOM
+                  // property, so it has to be set through a ref callback.
+                  ref={(el) => {
+                    if (el) el.indeterminate = selectedRows.length > 0 && !allVisibleSelected;
+                  }}
+                  onChange={toggleAll}
+                  disabled={visible.length === 0}
+                />
+              </label>
               <span className="selcount">{selectedRows.length} selected</span>
               <button className="btn sel-act" onClick={() => api.bulk(selectedIds, "pause")} disabled={!canPause}>
                 <IconPause /> Pause
@@ -293,10 +323,16 @@ function App() {
               <button className="btn sel-act" onClick={() => api.bulk(selectedIds, "resume")} disabled={!canResume}>
                 <IconPlay /> Resume
               </button>
-              <button className="btn sel-act danger" onClick={() => setDeletingSelection(true)}>
+              <button
+                className="btn sel-act danger"
+                onClick={() => setDeletingSelection(true)}
+                disabled={selectedRows.length === 0}
+              >
                 <IconTrash /> Remove
               </button>
-              <button className="clear" onClick={clearSelection}>Clear</button>
+              <button className="clear" onClick={exitSelectMode} title="Leave selection mode (Esc)">
+                Done
+              </button>
             </>
           ) : (
             <>
@@ -321,6 +357,7 @@ function App() {
               onOpen={() => setDetailId(row.id)}
               onDelete={() => setDeleteId(row.id)}
               onRename={() => setRenameId(row.id)}
+              selectMode={selectMode}
               selected={selected.ids.has(row.id)}
               onSelect={(extend) => toggleRow(row.id, extend)}
             />
@@ -391,7 +428,8 @@ function FilterPill({
 }
 
 function Row({
-  row, liveBytes, liveTotal, speed, onOpen, onDelete, onRename, selected, onSelect,
+  row, liveBytes, liveTotal, speed, onOpen, onDelete, onRename,
+  selectMode, selected, onSelect,
 }: {
   row: DownloadView;
   liveBytes?: number;
@@ -400,6 +438,7 @@ function Row({
   onOpen: () => void;
   onDelete: () => void;
   onRename: () => void;
+  selectMode: boolean;
   selected: boolean;
   onSelect: (extend: boolean) => void;
 }) {
@@ -417,17 +456,20 @@ function Row({
   const kind = fileKind(row.filename);
 
   return (
-    <div className={`row ${row.status}${selected ? " selected" : ""}`}>
-      <label className="row-check" title="Select">
-        <input
-          type="checkbox"
-          checked={selected}
-          // Shift extends the range from the last plain click, so the handler
-          // needs the modifier — `onChange` does not carry it.
-          onChange={() => {}}
-          onClick={(e) => onSelect(e.shiftKey)}
-        />
-      </label>
+    <div
+      className={`row ${row.status}${selected ? " selected" : ""}${selectMode ? " picking" : ""}`}
+      // In selection mode the whole row is the target, so the 15px checkbox is
+      // an indicator rather than the only thing you can hit.
+      onClick={selectMode ? (e) => onSelect(e.shiftKey) : undefined}
+    >
+      {selectMode && (
+        // A span, not a label: a label forwards its click to the input, which
+        // bubbles back to the row and toggles a second time. The row owns the
+        // click; this is the indicator.
+        <span className="row-check">
+          <input type="checkbox" checked={selected} readOnly tabIndex={-1} aria-hidden="true" />
+        </span>
+      )}
       {row.thumbnail ? (
         // Video preview thumbnail; overlay a small ring while downloading.
         <span className="thumb">
@@ -449,7 +491,11 @@ function Row({
         <span className={`type ${kind.cls}`}>{kind.icon}</span>
       )}
 
-      <div className="row-main clickable" onClick={onOpen} title="View details">
+      <div
+        className={`row-main${selectMode ? "" : " clickable"}`}
+        onClick={selectMode ? undefined : onOpen}
+        title={selectMode ? undefined : "View details"}
+      >
         <div className="row-top">
           <span className="fname" title={row.url}>{row.filename}</span>
           <span className={`status-dot ${row.status}`} title={STATUS_LABEL[row.status]} />
@@ -489,7 +535,9 @@ function Row({
         {row.error && <p className="row-err">{row.error}</p>}
       </div>
 
-      <div className="row-actions">
+      {/* Row actions must not toggle the row underneath them in selection
+          mode; each button already handles its own click. */}
+      <div className="row-actions" onClick={(e) => e.stopPropagation()}>
         {(row.status === "downloading" || row.status === "queued") && (
           <button className="act primary-act" title="Pause" onClick={() => api.pause(row.id)}><IconPause /></button>
         )}

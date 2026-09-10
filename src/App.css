@@ -533,12 +533,13 @@ input[type="checkbox"]:focus-visible {
    identical cards. */
 .list > .row:nth-child(even) { background: var(--surface-glass-2); }
 
-/* The checkbox stays out of the way until the row is hovered or picked, so an
-   idle list reads as a list rather than a form. */
-.row-check { display: flex; align-items: center; opacity: 0; transition: opacity 0.15s; }
-.row:hover .row-check,
-.row.selected .row-check,
-.row-check:focus-within { opacity: 1; }
+/* Only rendered inside selection mode, so there is nothing to fade: outside it
+   the list carries no checkboxes at all. */
+.row-check { display: flex; align-items: center; }
+
+/* In the mode the whole row is the hit target, and dragging across rows must
+   not start a text selection. */
+.row.picking { cursor: pointer; user-select: none; }
 /* Selection is marked by an accent edge and a faint wash, not by flooding the
    row: thirteen saturated rows at once is unreadable, and the alternating fill
    has to survive underneath. */

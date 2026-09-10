@@ -260,15 +260,6 @@ function App() {
             <IconPause />
           </button>
           <button
-            className={`icon-btn ${selectMode ? "active" : ""}`}
-            title={selectMode ? "Leave selection mode (Esc)" : "Select downloads"}
-            aria-pressed={selectMode}
-            onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
-            disabled={rows.length === 0}
-          >
-            <IconSelect />
-          </button>
-          <button
             className={`icon-btn ${showSettings ? "active" : ""}`}
             title="Settings"
             onClick={() => setShowSettings((s) => !s)}
@@ -339,9 +330,22 @@ function App() {
               <FilterPill label="All" count={rows.length} on={filter === "all"} onClick={() => setFilter("all")} />
               <FilterPill label="Active" count={active.length} on={filter === "active"} onClick={() => setFilter("active")} />
               <FilterPill label="Done" count={done.length} on={filter === "done"} onClick={() => setFilter("done")} />
-              {done.length > 0 && (
-                <button className="clear" onClick={() => api.clearHistory()}>Clear finished</button>
-              )}
+              {/* Selection starts from the strip it will take over, next to the
+                  pills it replaces — not from the toolbar, which is for actions
+                  on the app rather than on the list. */}
+              <div className="strip-right">
+                <button
+                  className="strip-btn"
+                  onClick={() => setSelectMode(true)}
+                  disabled={rows.length === 0}
+                  title="Pick several downloads to act on at once"
+                >
+                  <IconSelect size={15} /> Select
+                </button>
+                {done.length > 0 && (
+                  <button className="clear" onClick={() => api.clearHistory()}>Clear finished</button>
+                )}
+              </div>
             </>
           )}
         </div>

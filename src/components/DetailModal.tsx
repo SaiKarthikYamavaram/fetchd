@@ -43,8 +43,8 @@ export function DetailModal({
         <div className="space-y-1.5">
           <Progress value={percent ?? (downloaded > 0 ? 15 : 0)} />
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>{formatBytes(downloaded)}{total ? ` / ${formatBytes(total)}` : ""}</span>
-            <span className="flex items-center gap-2">
+            <span className="font-mono tabular-nums">{formatBytes(downloaded)}{total ? ` / ${formatBytes(total)}` : ""}</span>
+            <span className="flex items-center gap-2 font-mono tabular-nums">
               {percent !== null ? `${percent.toFixed(1)}%` : "size unknown"}
               {row.status === "downloading" && <span>{formatBytes(speed)}/s</span>}
             </span>
@@ -93,7 +93,7 @@ export function DetailModal({
                   <div className="space-y-1" key={i}>
                     <Progress value={pct} className="h-1.5" />
                     <span className="text-xs text-muted-foreground">
-                      #{i + 1} · {formatBytes(got)}/{formatBytes(size)}
+                      #{i + 1} · <span className="font-mono tabular-nums">{formatBytes(got)}/{formatBytes(size)}</span>
                     </span>
                   </div>
                 );

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Folder, Gauge, Power, ShieldAlert, Video } from "lucide-react";
+import { Folder, Gauge, Monitor, Moon, Power, ShieldAlert, Sun, Video } from "lucide-react";
 import { api, type Settings } from "../lib/api";
 import { applyTheme } from "../lib/theme";
+import { cn } from "cn";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -9,6 +10,19 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
+
+const THEME_OPTIONS = [
+  { value: "system", label: "System", icon: <Monitor className="size-4" /> },
+  { value: "light", label: "Light", icon: <Sun className="size-4" /> },
+  { value: "dark", label: "Dark", icon: <Moon className="size-4" /> },
+];
+
+const BANDWIDTH_PRESETS = [
+  { label: "Unlimited", kb: 0 },
+  { label: "1 MB/s", kb: 1024 },
+  { label: "5 MB/s", kb: 5120 },
+  { label: "10 MB/s", kb: 10240 },
+];
 
 /// One settings section: an icon-badged card title, its fields as children.
 /// Keeps the page a stack of named, scannable groups instead of one long
@@ -155,26 +169,46 @@ export function SettingsView() {
 
         <div className="space-y-1.5">
           <Label>Appearance</Label>
-          <Select
-            value={settings.theme || "system"}
-            onValueChange={(theme) => {
-              applyTheme(theme); // repaint now, don't wait for the round trip
-              update({ theme }, true);
-            }}
-          >
-            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="system">Match system</SelectItem>
-              <SelectItem value="light">Light</SelectItem>
-              <SelectItem value="dark">Dark</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="grid grid-cols-3 gap-2">
+            {THEME_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => {
+                  applyTheme(opt.value); // repaint now, don't wait for the round trip
+                  update({ theme: opt.value }, true);
+                }}
+                className={cn(
+                  "flex flex-col items-center gap-1.5 rounded-lg border p-3 text-xs transition-colors",
+                  (settings.theme || "system") === opt.value
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                )}
+              >
+                {opt.icon}
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
       </Section>
 
       <Section icon={<Gauge className="size-3.5" />} title="Bandwidth & network">
         <div className="space-y-1.5">
           <Label>Speed limit (KB/s, 0 = unlimited)</Label>
+          <div className="flex flex-wrap gap-1.5">
+            {BANDWIDTH_PRESETS.map((preset) => (
+              <Button
+                key={preset.label}
+                type="button"
+                size="sm"
+                variant={settings.bandwidth_kb === preset.kb ? "default" : "outline"}
+                onClick={() => update({ bandwidth_kb: preset.kb }, true)}
+              >
+                {preset.label}
+              </Button>
+            ))}
+          </div>
           <Input
             type="number"
             min={0}

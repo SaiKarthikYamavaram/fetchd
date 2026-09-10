@@ -85,3 +85,18 @@ export function extensionOf(name: string): string {
 export function kindOf(name: string): Kind {
   return BY_EXT[extensionOf(name)] ?? "file";
 }
+
+/// Broad genre for the sidebar's category nav — coarser than Kind, so four
+/// buckets cover all fifteen kinds instead of one button per extension family.
+export type Category = "media" | "documents" | "archives" | "other";
+
+const CATEGORY_OF: Record<Kind, Category> = {
+  video: "media", audio: "media",
+  doc: "documents", sheet: "documents", slides: "documents", book: "documents",
+  archive: "archives", package: "archives", disc: "archives", torrent: "archives",
+  image: "other", code: "other", font: "other", subs: "other", file: "other",
+};
+
+export function categoryOf(name: string): Category {
+  return CATEGORY_OF[kindOf(name)];
+}

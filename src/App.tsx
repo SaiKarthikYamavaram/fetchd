@@ -5,7 +5,7 @@ import {
   Archive, BookOpen, Captions, Check, CircleAlert, CircleCheckBig, Code2, Copy,
   Disc, Download, ExternalLink, File, FileText, Folder, Image, ListChecks,
   Loader2, Magnet, MoreVertical, Music, Package, Pause, Pencil, Play, Plus,
-  Presentation, RotateCcw, Search, Settings, Sheet, Trash2, Type as TypeIcon,
+  Presentation, RotateCcw, Search, Sheet, Trash2, Type as TypeIcon,
   Video, X,
 } from "lucide-react";
 import {
@@ -23,9 +23,10 @@ import { DetailModal } from "./components/DetailModal";
 import { ConfirmDelete } from "./components/ConfirmDelete";
 import { RenameDialog } from "./components/RenameDialog";
 import * as selection from "./lib/selection";
-import { kindOf, type Kind } from "./lib/filetype";
+import { categoryOf, kindOf, type Category, type Kind } from "./lib/filetype";
 import { AddDialog } from "./components/AddDialog";
 import { RingProgress } from "./components/Loaders";
+import { Sidebar, type QueueFilter } from "./components/Sidebar";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card } from "./components/ui/card";
@@ -36,7 +37,6 @@ import {
 } from "./components/ui/dropdown-menu";
 import { Input } from "./components/ui/input";
 import { Progress } from "./components/ui/progress";
-import { Tabs, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Toaster } from "./components/ui/sonner";
 import { cn } from "cn";
 import "./App.css";
@@ -46,7 +46,21 @@ import "./App.css";
 const ALPHA = 0.25;
 
 type Sample = { at: number; bytes: number; speed: number };
-type Filter = "all" | "active" | "done";
+
+const QUEUE_TITLE: Record<QueueFilter, string> = {
+  all: "All downloads",
+  active: "Active downloads",
+  completed: "Completed",
+  paused: "Paused",
+  failed: "Failed",
+};
+
+const CATEGORY_TITLE: Record<Category, string> = {
+  media: "Media",
+  documents: "Documents",
+  archives: "Archives",
+  other: "Other",
+};
 
 const STATUS_LABEL: Record<Status, string> = {
   queued: "Queued",
@@ -86,20 +100,18 @@ const KIND_STYLE: Record<Kind, string> = {
   file: "bg-muted text-muted-foreground",
 };
 
-/// The spool mark: a ring broken into four segments — the connections a
-/// download is split across.
-function Logo({ size = 18 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={4.2}>
-      <circle cx="12" cy="12" r="9.5" strokeDasharray="12.435 2.487" transform="rotate(-90 12 12)" />
-    </svg>
-  );
-}
-
 function App() {
   const [rows, setRows] = useState<DownloadView[]>([]);
   const [showSettings, setShowSettings] = useState(false);
-  const [filter, setFilter] = useState<Filter>("all");
+  // Two independent axes: which queue (status) and which category (file
+  // kind) narrow the list. Neither excludes the other — "Failed" and
+  // "Media" together means failed video/audio downloads.
+  const [queue, setQueue] = useState<QueueFilter>("all");
+  const [category, setCategory] = useState<Category | "all">("all");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Mirrors the persisted setting so the sidebar's quick cycle button can
+  // read and flip it without opening Settings.
+  const [theme, setTheme] = useState("system");
   const [detailId, setDetailId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [renameId, setRenameId] = useState<string | null>(null);
@@ -154,7 +166,21 @@ function App() {
 
   // Theme is stored in settings, so apply the saved choice on startup.
   useEffect(() => {
-    api.getSettings().then((s) => applyTheme(s.theme)).catch(() => {});
+    api.getSettings().then((s) => {
+      applyTheme(s.theme);
+      setTheme(s.theme || "system");
+    }).catch(() => {});
+  }, []);
+
+  /// Quick-access cycle from the sidebar: system → light → dark → system.
+  /// Settings has the full picker; this is just the fast path.
+  const cycleTheme = useCallback(() => {
+    setTheme((current) => {
+      const next = current === "system" ? "light" : current === "light" ? "dark" : "system";
+      applyTheme(next);
+      api.getSettings().then((s) => api.updateSettings({ ...s, theme: next })).catch(() => {});
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -209,8 +235,10 @@ function App() {
     setSelected((prev) => selection.prune(prev, rows.map((r) => r.id)));
   }, [rows]);
 
-  const active = rows.filter((r) => r.status !== "completed" && r.status !== "failed");
-  const done = rows.filter((r) => r.status === "completed" || r.status === "failed");
+  const active = rows.filter((r) => r.status === "downloading" || r.status === "queued");
+  const completed = rows.filter((r) => r.status === "completed");
+  const paused = rows.filter((r) => r.status === "paused" || r.status === "interrupted");
+  const failed = rows.filter((r) => r.status === "failed");
   // Everything Resume all would act on: stopped, but not finished.
   const stopped = rows.filter(
     (r) => r.status === "paused" || r.status === "interrupted" || r.status === "failed",
@@ -218,16 +246,49 @@ function App() {
   const downloading = active.filter((r) => r.status === "downloading");
   const totalSpeed = downloading.reduce((s, r) => s + (samples.current.get(r.id)?.speed ?? 0), 0);
 
+  // Sidebar badge counts. Each is independent of the other filter axis and
+  // of the search box — a faceted count, not a running total of what's on
+  // screen right now.
+  const queueCounts: Record<QueueFilter, number> = {
+    all: rows.length,
+    active: active.length,
+    completed: completed.length,
+    paused: paused.length,
+    failed: failed.length,
+  };
+  const categoryCounts: Record<Category, number> = {
+    media: rows.filter((r) => categoryOf(r.filename) === "media").length,
+    documents: rows.filter((r) => categoryOf(r.filename) === "documents").length,
+    archives: rows.filter((r) => categoryOf(r.filename) === "archives").length,
+    other: rows.filter((r) => categoryOf(r.filename) === "other").length,
+  };
+  const sidebarCounts = { ...queueCounts, ...categoryCounts };
+
+  const queueRows = useMemo(() => {
+    switch (queue) {
+      case "active": return active;
+      case "completed": return completed;
+      case "paused": return paused;
+      case "failed": return failed;
+      default: return rows;
+    }
+    // active/completed/paused/failed are derived fresh from `rows` every
+    // render, so depending on `rows` alone keeps this in sync with them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, rows]);
+
   const visible = useMemo(() => {
-    const byStatus = filter === "active" ? active : filter === "done" ? done : rows;
+    const byCategory = category === "all"
+      ? queueRows
+      : queueRows.filter((r) => categoryOf(r.filename) === category);
     const q = query.trim().toLowerCase();
-    if (!q) return byStatus;
+    if (!q) return byCategory;
     // Match the URL too: a name that came back as "download.bin" is often only
     // findable by where it came from.
-    return byStatus.filter(
+    return byCategory.filter(
       (r) => r.filename.toLowerCase().includes(q) || r.url.toLowerCase().includes(q),
     );
-  }, [filter, rows, active, done, query]);
+  }, [queueRows, category, query]);
 
   // Look these up from the current rows each render so the open modals reflect
   // live status; close automatically if the entry is gone.
@@ -323,8 +384,11 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const narrowed = queue !== "all" || category !== "all";
+  const title = category === "all" ? QUEUE_TITLE[queue] : `${QUEUE_TITLE[queue]} · ${CATEGORY_TITLE[category]}`;
+
   return (
-    <div className="relative mx-auto flex h-screen max-w-3xl flex-col overflow-hidden">
+    <div className="relative flex h-screen overflow-hidden">
       {/* Ambient glow. Purely decorative, so hidden from assistive tech and
           pinned behind everything else. */}
       <div aria-hidden="true" className="pointer-events-none fixed -top-40 -left-40 -z-10 size-[28rem] rounded-full bg-primary/25 blur-3xl" />
@@ -333,62 +397,63 @@ function App() {
 
       <Toaster />
 
-      <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-border/60 bg-background/70 px-4 py-3 backdrop-blur-md">
-        <div className="flex items-center gap-2.5">
-          <span className="flex size-8 items-center justify-center rounded-full bg-gradient-to-br from-primary to-violet-500 text-primary-foreground ring-4 ring-primary/10">
-            <Logo size={17} />
-          </span>
-          <span className="bg-gradient-to-r from-primary to-violet-500 bg-clip-text text-[15px] font-bold tracking-tight text-transparent">spool</span>
-          {totalSpeed > 0 && (
-            <Badge variant="secondary" className="gap-1.5 border border-primary/20 bg-primary/10 text-primary">
-              <span className="size-1.5 rounded-full bg-primary animate-pulse" />
-              {formatBytes(totalSpeed)}/s
-            </Badge>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="rounded-full"
-            title="Pause all"
-            onClick={() => api.pauseAll().catch(report)}
-            disabled={!active.length}
-          >
-            <Pause />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="rounded-full"
-            title="Resume all"
-            onClick={() => api.resumeAll().catch(report)}
-            disabled={!stopped.length}
-          >
-            <Play />
-          </Button>
-          <Button
-            variant={showSettings ? "secondary" : "ghost"}
-            size="icon"
-            className="rounded-full"
-            title="Settings"
-            onClick={() => setShowSettings((s) => !s)}
-          >
-            <Settings />
-          </Button>
-        </div>
-      </header>
+      <Sidebar
+        queue={queue}
+        onQueue={(q) => { setQueue(q); setShowSettings(false); }}
+        category={category}
+        onCategory={(c) => { setCategory(c); setShowSettings(false); }}
+        counts={sidebarCounts}
+        totalSpeed={totalSpeed}
+        showSettings={showSettings}
+        onToggleSettings={() => setShowSettings((s) => !s)}
+        theme={theme}
+        onCycleTheme={cycleTheme}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
+      />
 
       <main className="flex-1 overflow-y-auto px-4 py-4">
         {showSettings ? (
           <SettingsView />
         ) : (
           <>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h1 className="text-lg font-semibold">{title}</h1>
+                <p className="text-sm text-muted-foreground">
+                  {visible.length} {visible.length === 1 ? "item" : "items"}
+                </p>
+              </div>
+              {/* Global queue controls: these act on everything, not just what
+                  the current queue/category filter shows. */}
+              <div className="flex items-center gap-1.5">
+                <Button variant="outline" size="sm" onClick={() => api.pauseAll().catch(report)} disabled={!active.length}>
+                  <Pause /> Pause all
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => api.resumeAll().catch(report)} disabled={!stopped.length}>
+                  <Play /> Resume all
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={selectMode ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary" : undefined}
+                  onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+                  disabled={rows.length === 0}
+                  title={selectMode ? "Leave selection mode (Esc)" : "Pick several downloads to act on at once"}
+                >
+                  <ListChecks /> Select
+                </Button>
+                {completed.length + failed.length > 0 && (
+                  <Button variant="ghost" size="sm" onClick={() => api.clearHistory().catch(report)}>Clear finished</Button>
+                )}
+              </div>
+            </div>
+
             {/* The widest field on the screen belongs to the thing done most
                 often. Adding is a deliberate act with several answers to give,
                 so it opens the dialog that asks for them. One elevated bar
                 rather than three loose controls floating on the page. */}
-            <div className="flex items-center gap-1 rounded-xl border bg-card/60 p-1.5 shadow-sm backdrop-blur-sm">
+            <div className="mt-3 flex items-center gap-1 rounded-xl border bg-card/60 p-1.5 shadow-sm backdrop-blur-sm">
               <div className="relative flex-1">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -436,63 +501,34 @@ function App() {
               </Button>
             </div>
 
-            <div className="mt-3 flex h-9 items-center gap-2">
-              {/* The selection controls take over this strip rather than
-                  opening a bar of their own below it: same row, same height,
-                  so entering the mode never pushes the list down. */}
-              {selectMode ? (
-                <>
-                  <Checkbox
-                    checked={allVisibleSelected ? true : selectedRows.length > 0 ? "indeterminate" : false}
-                    onCheckedChange={toggleAll}
-                    disabled={visible.length === 0}
-                    title={allVisibleSelected ? "Deselect all" : "Select all"}
-                  />
-                  <span className="text-sm text-muted-foreground">{selectedRows.length} selected</span>
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <Button size="sm" variant="outline" onClick={() => api.bulk(selectedIds, "pause").catch(report)} disabled={!canPause}>
-                      <Pause /> Pause
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => api.bulk(selectedIds, "resume").catch(report)} disabled={!canResume}>
-                      <Play /> Resume
-                    </Button>
-                    <Button size="sm" variant="destructive" onClick={() => setDeletingSelection(true)} disabled={selectedRows.length === 0}>
-                      <Trash2 /> Remove
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={exitSelectMode} title="Leave selection mode (Esc)">
-                      Done
-                    </Button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <Tabs value={filter} onValueChange={(v) => setFilter(v as Filter)}>
-                    <TabsList variant="line">
-                      <TabsTrigger value="all">All <Badge variant="secondary" className="px-1.5">{rows.length}</Badge></TabsTrigger>
-                      <TabsTrigger value="active">Active <Badge variant="secondary" className="px-1.5">{active.length}</Badge></TabsTrigger>
-                      <TabsTrigger value="done">Done <Badge variant="secondary" className="px-1.5">{done.length}</Badge></TabsTrigger>
-                    </TabsList>
-                  </Tabs>
-                  {/* Selection starts from the strip it will take over, next
-                      to the pills it replaces — not from the toolbar, which
-                      is for actions on the app rather than on the list. */}
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setSelectMode(true)}
-                      disabled={rows.length === 0}
-                      title="Pick several downloads to act on at once"
-                    >
-                      <ListChecks /> Select
-                    </Button>
-                    {done.length > 0 && (
-                      <Button size="sm" variant="ghost" onClick={() => api.clearHistory().catch(report)}>Clear finished</Button>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
+            {/* A floating glass ribbon that takes over once a selection
+                starts, rather than a bar of its own that pushes the list
+                down every time selection mode is entered. */}
+            {selectMode && (
+              <div className="mt-3 flex h-9 items-center gap-2 rounded-xl border bg-card/80 px-3 shadow-sm backdrop-blur-sm">
+                <Checkbox
+                  checked={allVisibleSelected ? true : selectedRows.length > 0 ? "indeterminate" : false}
+                  onCheckedChange={toggleAll}
+                  disabled={visible.length === 0}
+                  title={allVisibleSelected ? "Deselect all" : "Select all"}
+                />
+                <span className="text-sm text-muted-foreground">{selectedRows.length} selected</span>
+                <div className="ml-auto flex items-center gap-1.5">
+                  <Button size="sm" variant="outline" onClick={() => api.bulk(selectedIds, "pause").catch(report)} disabled={!canPause}>
+                    <Pause /> Pause
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => api.bulk(selectedIds, "resume").catch(report)} disabled={!canResume}>
+                    <Play /> Resume
+                  </Button>
+                  <Button size="sm" variant="destructive" onClick={() => setDeletingSelection(true)} disabled={selectedRows.length === 0}>
+                    <Trash2 /> Remove
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={exitSelectMode} title="Leave selection mode (Esc)">
+                    Done
+                  </Button>
+                </div>
+              </div>
+            )}
 
             <div className="mt-3 space-y-2">
               {visible.map((row) => (
@@ -519,7 +555,7 @@ function App() {
                   <p className="font-medium">
                     {query
                       ? "Nothing matches that"
-                      : `No downloads ${filter !== "all" ? "here" : "yet"}`}
+                      : `No downloads ${narrowed ? "here" : "yet"}`}
                   </p>
                   <p className="max-w-sm text-sm text-muted-foreground">
                     {query ? (
@@ -612,6 +648,16 @@ function usePoster(row: DownloadView): string | null {
   return poster;
 }
 
+/// The download's origin, for a small provenance pill next to the filename.
+/// Null for anything unparseable rather than showing the raw URL.
+function hostnameOf(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
 function Row({
   row, liveBytes, liveTotal, speed, onOpen, onDelete, onRename,
   selectMode, selected, onSelect, onFail,
@@ -641,6 +687,7 @@ function Row({
   const indeterminate = percent === null && downloaded > 0;
   const running = row.status === "downloading";
   const kind = fileKind(row.filename);
+  const domain = hostnameOf(row.url);
   const poster = usePoster(row);
   const preview = row.thumbnail ?? poster;
 
@@ -716,7 +763,14 @@ function Row({
         }
       >
         <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium" title={row.url}>{row.filename}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-sm font-medium" title={row.url}>{row.filename}</span>
+            {domain && (
+              <span className="shrink-0 truncate rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground/80 max-w-24">
+                {domain}
+              </span>
+            )}
+          </span>
           {row.status !== "completed" && row.status !== "failed" && (
             <span className={cn("size-2 shrink-0 rounded-full", STATUS_DOT[row.status])} title={STATUS_LABEL[row.status]} />
           )}
@@ -730,17 +784,17 @@ function Row({
         )}
 
         <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
-          <span>
+          <span className="font-mono tabular-nums">
             {formatBytes(downloaded)}
             {total ? ` / ${formatBytes(total)}` : " · unknown size"}
           </span>
           <span className="flex items-center gap-2">
             {running && (
-              <>
+              <span className="flex items-center gap-2 font-mono tabular-nums">
                 <span>{formatBytes(speed)}/s</span>
                 {eta && <span>{eta} left</span>}
                 {row.segments > 1 && <span>{row.segments} conns</span>}
-              </>
+              </span>
             )}
             {(row.status === "queued" || row.status === "interrupted") && (
               <span className="flex items-center gap-1">{STATUS_LABEL[row.status]} <Loader2 className="size-3 animate-spin" /></span>

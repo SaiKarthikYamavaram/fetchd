@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extensionOf, kindOf } from "./filetype";
+import { categoryOf, extensionOf, kindOf } from "./filetype";
 
 describe("extensionOf", () => {
   it("takes the final dotted segment, lowercased", () => {
@@ -65,5 +65,32 @@ describe("kindOf", () => {
     expect(kindOf("download.bin")).toBe("disc"); // .bin is a disc image
     expect(kindOf("mystery.qqq")).toBe("file");
     expect(kindOf("README")).toBe("file");
+  });
+});
+
+describe("categoryOf", () => {
+  it("groups video and audio as media", () => {
+    expect(categoryOf("clip.mkv")).toBe("media");
+    expect(categoryOf("song.flac")).toBe("media");
+  });
+
+  it("groups office kinds as documents", () => {
+    expect(categoryOf("report.pdf")).toBe("documents");
+    expect(categoryOf("budget.xlsx")).toBe("documents");
+    expect(categoryOf("deck.pptx")).toBe("documents");
+    expect(categoryOf("novel.epub")).toBe("documents");
+  });
+
+  it("groups compressed and installable kinds as archives", () => {
+    expect(categoryOf("backup.tar.gz")).toBe("archives");
+    expect(categoryOf("tool.deb")).toBe("archives");
+    expect(categoryOf("ubuntu.iso")).toBe("archives");
+    expect(categoryOf("season01.torrent")).toBe("archives");
+  });
+
+  it("falls back to other for the rest", () => {
+    expect(categoryOf("photo.png")).toBe("other");
+    expect(categoryOf("script.py")).toBe("other");
+    expect(categoryOf("README")).toBe("other");
   });
 });

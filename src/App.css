@@ -17,6 +17,8 @@
   --surface: #ffffff;
   /* Glass fill for cards and rows — a gradient, so never use it in color-mix. */
   --surface-glass: linear-gradient(to bottom, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.72));
+  /* Every other row, one step down, so a long list has rhythm. */
+  --surface-glass-2: linear-gradient(to bottom, rgba(246, 247, 250, 0.96), rgba(238, 240, 245, 0.80));
   --surface-2: rgba(10, 12, 20, 0.045);
   --surface-3: rgba(10, 12, 20, 0.075);
   --field: #ffffff;
@@ -83,6 +85,7 @@
 
     --surface: #101014;
     --surface-glass: linear-gradient(to bottom, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+    --surface-glass-2: linear-gradient(to bottom, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.008));
     --surface-2: rgba(255, 255, 255, 0.05);
     --surface-3: rgba(255, 255, 255, 0.08);
     --field: #0f0f12;
@@ -132,6 +135,7 @@
 
   --surface: #101014;
   --surface-glass: linear-gradient(to bottom, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+  --surface-glass-2: linear-gradient(to bottom, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.008));
   --surface-2: rgba(255, 255, 255, 0.05);
   --surface-3: rgba(255, 255, 255, 0.08);
   --field: #0f0f12;
@@ -404,7 +408,15 @@ body { margin: 0; background: var(--bg); color: var(--fg); }
 .toast.err { color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); border-color: color-mix(in srgb, var(--err) 30%, transparent); word-break: break-word; }
 
 /* ── Filters ────────────────────────────────────────────────────────────── */
-.filters { display: flex; align-items: center; gap: 6px; margin-bottom: 14px; }
+/* Holds either the filter pills or the selection actions. Pinned height, so
+   swapping between them never moves the list. */
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  margin-bottom: 14px;
+}
 
 .pill {
   display: inline-flex;
@@ -506,24 +518,20 @@ input[type="checkbox"]:focus-visible {
 
 .select-all { display: flex; align-items: center; padding: 0 4px 0 2px; }
 
-.selbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-  padding: 9px 12px;
-  background: linear-gradient(to bottom,
-              color-mix(in srgb, var(--accent) 16%, transparent),
-              color-mix(in srgb, var(--accent) 6%, transparent));
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm), 0 0 50px rgba(94, 106, 210, 0.10);
+.selcount {
+  margin: 0 5px 0 3px;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
 }
-.selcount { font-size: 13px; font-weight: 600; margin-right: 2px; }
-.selbar .btn { padding: 5px 10px; font-size: 12.5px; }
+.sel-act { height: 30px; padding: 0 11px; font-size: 12.5px; }
 
 /* ── List + rows ────────────────────────────────────────────────────────── */
-.list { display: flex; flex-direction: column; gap: 10px; }
+.list { display: flex; flex-direction: column; gap: 8px; }
+/* Alternate the fill so a long list reads as a rhythm rather than a wall of
+   identical cards. */
+.list > .row:nth-child(even) { background: var(--surface-glass-2); }
 
 /* The checkbox stays out of the way until the row is hovered or picked, so an
    idle list reads as a list rather than a form. */
@@ -531,13 +539,13 @@ input[type="checkbox"]:focus-visible {
 .row:hover .row-check,
 .row.selected .row-check,
 .row-check:focus-within { opacity: 1; }
+/* Selection is marked by an accent edge and a faint wash, not by flooding the
+   row: thirteen saturated rows at once is unreadable, and the alternating fill
+   has to survive underneath. */
 .row.selected {
-  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
-  background: linear-gradient(to bottom,
-              color-mix(in srgb, var(--accent) 14%, transparent),
-              color-mix(in srgb, var(--accent) 5%, transparent));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent),
-              var(--shadow-sm), 0 0 50px rgba(94, 106, 210, 0.10);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  box-shadow: var(--shadow-sm), inset 3px 0 0 0 var(--accent),
+              inset 0 0 0 999px color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 .row {
@@ -549,14 +557,17 @@ input[type="checkbox"]:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
-  transition: border-color 0.25s var(--ease), box-shadow 0.25s var(--ease),
-              transform 0.25s var(--ease);
+  transition: border-color 0.25s var(--ease), box-shadow 0.25s var(--ease);
 }
-/* Precision, not play: 2px of lift and a brighter edge, nothing more. */
+/* Precision, not play: the edge brightens and the shadow deepens. No lift —
+   rows sit in a list, and nudging each one under the cursor reads as jitter. */
 .row:hover {
   border-color: var(--border-strong);
   box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
+}
+.row.selected:hover {
+  box-shadow: var(--shadow-md), inset 3px 0 0 0 var(--accent),
+              inset 0 0 0 999px color-mix(in srgb, var(--accent) 9%, transparent);
 }
 
 .type {
@@ -651,7 +662,15 @@ input[type="checkbox"]:focus-visible {
 
 /* Actions: the primary one is always visible; secondary buttons and the
    separator stay dimmed until the row is hovered. */
-.row-actions { display: flex; gap: 2px; flex-shrink: 0; }
+/* A completed row shows four buttons, a running one three. Without a fixed
+   lane the meta line would re-wrap the moment a download finished. */
+.row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+  min-width: 146px;
+}
 .row-actions .act:not(.primary-act),
 .act-sep { opacity: 0; transition: opacity 0.15s; }
 .row:hover .row-actions .act:not(.primary-act),
@@ -985,7 +1004,6 @@ label { cursor: pointer; }
     animation: none !important;
   }
   /* The lift and the shine sweep are decoration; the state change is not. */
-  .row:hover { transform: none; }
   .add-btn::after { display: none; }
 }
 

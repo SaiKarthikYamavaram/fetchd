@@ -281,29 +281,34 @@ function App() {
               disabled={visible.length === 0}
             />
           </label>
-          <FilterPill label="All" count={rows.length} on={filter === "all"} onClick={() => setFilter("all")} />
-          <FilterPill label="Active" count={active.length} on={filter === "active"} onClick={() => setFilter("active")} />
-          <FilterPill label="Done" count={done.length} on={filter === "done"} onClick={() => setFilter("done")} />
-          {done.length > 0 && (
-            <button className="clear" onClick={() => api.clearHistory()}>Clear finished</button>
+          {/* The selection actions take over this row rather than opening a
+              bar of their own below it: same strip, same height, so picking a
+              row never pushes the list down. */}
+          {selectedRows.length > 0 ? (
+            <>
+              <span className="selcount">{selectedRows.length} selected</span>
+              <button className="btn sel-act" onClick={() => api.bulk(selectedIds, "pause")} disabled={!canPause}>
+                <IconPause /> Pause
+              </button>
+              <button className="btn sel-act" onClick={() => api.bulk(selectedIds, "resume")} disabled={!canResume}>
+                <IconPlay /> Resume
+              </button>
+              <button className="btn sel-act danger" onClick={() => setDeletingSelection(true)}>
+                <IconTrash /> Remove
+              </button>
+              <button className="clear" onClick={clearSelection}>Clear</button>
+            </>
+          ) : (
+            <>
+              <FilterPill label="All" count={rows.length} on={filter === "all"} onClick={() => setFilter("all")} />
+              <FilterPill label="Active" count={active.length} on={filter === "active"} onClick={() => setFilter("active")} />
+              <FilterPill label="Done" count={done.length} on={filter === "done"} onClick={() => setFilter("done")} />
+              {done.length > 0 && (
+                <button className="clear" onClick={() => api.clearHistory()}>Clear finished</button>
+              )}
+            </>
           )}
         </div>
-
-        {selectedRows.length > 0 && (
-          <div className="selbar">
-            <span className="selcount">{selectedRows.length} selected</span>
-            <button className="btn" onClick={() => api.bulk(selectedIds, "pause")} disabled={!canPause}>
-              <IconPause /> Pause
-            </button>
-            <button className="btn" onClick={() => api.bulk(selectedIds, "resume")} disabled={!canResume}>
-              <IconPlay /> Resume
-            </button>
-            <button className="btn danger" onClick={() => setDeletingSelection(true)}>
-              <IconTrash /> Remove
-            </button>
-            <button className="clear" onClick={clearSelection}>Clear</button>
-          </div>
-        )}
 
         <div className="list">
           {visible.map((row) => (

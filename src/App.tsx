@@ -19,8 +19,8 @@ import { AddDialog } from "./components/AddDialog";
 import {
   IconArchive, IconDisc, IconDoc, IconDownload, IconFile,
   IconFolder, IconImage, IconImport, IconMusic, IconOpen, IconPause, IconPlay,
-  IconCheck, IconEdit, IconRetry, IconSearch, IconSelect, IconSettings, IconTrash,
-  IconVideo, IconX,
+  IconCheck, IconEdit, IconPlus, IconRetry, IconSearch, IconSelect, IconSettings,
+  IconTrash, IconVideo, IconX,
 } from "./components/icons";
 import { Spinner, Dots } from "./components/Loaders";
 import "./App.css";
@@ -298,9 +298,6 @@ function App() {
           )}
         </div>
         <div className="toolbar">
-          <button className="icon-btn" title="Import from .txt" onClick={importText}>
-            <IconImport />
-          </button>
           <button
             className="icon-btn"
             title="Pause all"
@@ -356,8 +353,15 @@ function App() {
               </button>
             )}
           </label>
+          {/* Both ways of bringing a download in, side by side and spelled
+              out. The toolbar keeps only what acts on the whole queue. */}
+          <button className="import-btn" type="button" onClick={importText}>
+            <IconImport size={15} /> Import
+          </button>
+          {/* A plus, not another arrow: Import brings a file in, Add makes a
+              new entry, and the brand already owns the download glyph. */}
           <button className="add-btn" type="button" onClick={() => setPendingUrl("")}>
-            <IconDownload size={15} /> Add
+            <IconPlus size={16} /> Add
           </button>
         </div>
 

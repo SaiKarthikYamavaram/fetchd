@@ -94,7 +94,7 @@ function render(items) {
     const row = document.createElement("div");
     row.className = "item";
     row.innerHTML = `
-      <span class="tag">${isStreamManifest(it.url) ? "HLS" : TYPE_LABEL[it.type] || "BIN"}</span>
+      <span class="tag" data-type="${isStreamManifest(it.url) ? "video" : escapeAttr(it.type)}">${isStreamManifest(it.url) ? "HLS" : TYPE_LABEL[it.type] || "BIN"}</span>
       <div class="meta">
         <div class="name" title="${escapeAttr(it.url)}">${escapeHtml(it.filename)}</div>
         <div class="sub">${isStreamManifest(it.url) ? "stream · via yt-dlp" : `${it.type} · ${fmtSize(it.size)}`}</div>

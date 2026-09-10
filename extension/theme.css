@@ -1,0 +1,240 @@
+/* Shared surface for the extension's pages (popup, options).
+ *
+ * The same "Linear / Modern" system the app uses: near-black bases lit by a
+ * single indigo accent, hairline borders, three-layer shadows. Kept in sync
+ * with src/App.css by hand — the two cannot share a stylesheet, so the token
+ * names and values are deliberately identical to make drift obvious.
+ *
+ * The in-page panel in content.js repeats these values inline, because it
+ * renders under `all: initial` inside someone else's document.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f6f7fa;
+  --bg-grad: radial-gradient(ellipse at top, #ffffff 0%, #f6f7fa 55%, #eef0f5 100%);
+  --surface: #ffffff;
+  --surface-glass: linear-gradient(to bottom, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.72));
+  --surface-2: rgba(10, 12, 20, 0.045);
+  --surface-3: rgba(10, 12, 20, 0.075);
+  --field: #ffffff;
+
+  --border: rgba(10, 12, 20, 0.09);
+  --border-strong: rgba(10, 12, 20, 0.16);
+
+  --fg: #14161c;
+  --muted: #5f6672;
+  --faint: #9aa0ad;
+
+  --accent: #5e6ad2;
+  --accent-bright: #6872d9;
+  --accent-text: #4a55bd;
+  --accent-2: #8b5cf6;
+
+  --ok: #0d9668;
+  --err: #dc2626;
+
+  --shadow-sm: 0 0 0 1px rgba(10, 12, 20, 0.05), 0 1px 2px rgba(10, 12, 20, 0.05),
+               0 6px 20px -10px rgba(10, 12, 20, 0.14);
+  --shadow-cta: 0 0 0 1px rgba(94, 106, 210, 0.55), 0 4px 12px rgba(94, 106, 210, 0.32),
+                inset 0 1px 0 0 rgba(255, 255, 255, 0.28);
+  --inner-hl: inset 0 1px 0 0 rgba(255, 255, 255, 0.6);
+  --ring: 0 0 0 4px rgba(94, 106, 210, 0.18);
+
+  --blob-a: rgba(94, 106, 210, 0.18);
+  --blob-b: rgba(139, 92, 246, 0.13);
+
+  --radius: 16px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #050506;
+    --bg-grad: radial-gradient(ellipse at top, #0a0a0f 0%, #050506 50%, #020203 100%);
+    --surface: #101014;
+    --surface-glass: linear-gradient(to bottom, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
+    --surface-2: rgba(255, 255, 255, 0.05);
+    --surface-3: rgba(255, 255, 255, 0.08);
+    --field: #0f0f12;
+
+    --border: rgba(255, 255, 255, 0.06);
+    --border-strong: rgba(255, 255, 255, 0.10);
+
+    --fg: #ededef;
+    --muted: #8a8f98;
+    --faint: rgba(255, 255, 255, 0.42);
+
+    /* #5e6ad2 as text on near-black is only ~4.1:1, so text takes a lighter
+       step of the same hue; fills keep the true accent. */
+    --accent-text: #8b93e8;
+
+    --ok: #34d399;
+    --err: #f87171;
+
+    --shadow-sm: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 2px 20px rgba(0, 0, 0, 0.4),
+                 0 0 40px rgba(0, 0, 0, 0.2);
+    --shadow-cta: 0 0 0 1px rgba(94, 106, 210, 0.5), 0 4px 12px rgba(94, 106, 210, 0.3),
+                  inset 0 1px 0 0 rgba(255, 255, 255, 0.2);
+    --inner-hl: inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+    --ring: 0 0 0 4px rgba(94, 106, 210, 0.22);
+
+    --blob-a: rgba(94, 106, 210, 0.25);
+    --blob-b: rgba(139, 92, 246, 0.15);
+  }
+}
+
+* { box-sizing: border-box; }
+
+/* An author `display` beats the UA sheet's `[hidden] { display: none }`, so a
+   flex container with the attribute set stays visible. Every popup section is
+   toggled through `hidden`, so state this once and loudly. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+  background: var(--bg-grad), var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent-text); text-decoration: none; cursor: pointer; }
+a:hover { color: var(--accent); }
+
+.mono { font-family: var(--mono); }
+
+/* ── Ambient light pools ───────────────────────────────────────────────── */
+/* One element rather than four: these surfaces are small enough that a single
+   blurred pool reads as the same lighting without the animation cost. */
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ambient::before,
+.ambient::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+}
+.ambient::before {
+  left: 10%; top: -160px;
+  width: 320px; height: 240px;
+  background: radial-gradient(circle, var(--blob-a), transparent 70%);
+  filter: blur(70px);
+}
+.ambient::after {
+  right: -120px; bottom: -140px;
+  width: 260px; height: 240px;
+  background: radial-gradient(circle, var(--blob-b), transparent 70%);
+  filter: blur(60px);
+}
+
+/* ── Controls ──────────────────────────────────────────────────────────── */
+/* Chrome paints a native checkbox that ignores the theme — the same problem
+   WebKitGTK gives the app — so draw our own. */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-grid;
+  place-content: center;
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  background: var(--field);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+input[type="checkbox"]:hover:not(:disabled) { border-color: var(--accent); }
+input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 10px rgba(94, 106, 210, 0.45);
+}
+input[type="checkbox"]:checked::after {
+  content: "";
+  width: 8px;
+  height: 4px;
+  border: 2px solid #fff;
+  border-top: 0;
+  border-right: 0;
+  transform: rotate(-45deg) translateY(-1px);
+}
+input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+input[type="number"],
+textarea {
+  font: inherit;
+  color: var(--fg);
+  background: var(--field);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+input[type="number"]:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+textarea::placeholder { color: var(--faint); }
+/* The native spinner is a light widget that ignores colour; typing and the
+   arrow keys still step the value. */
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font: inherit;
+  font-weight: 550;
+  color: var(--fg);
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px var(--border-strong), var(--inner-hl);
+  transition: background 0.2s var(--ease), box-shadow 0.2s var(--ease), transform 0.12s var(--ease);
+}
+button:hover:not(:disabled) { background: var(--surface-3); }
+button:active:not(:disabled) { transform: scale(0.98); }
+button:disabled { opacity: 0.4; cursor: default; }
+
+button.primary {
+  position: relative;
+  overflow: hidden;
+  color: #fff;
+  background: var(--accent);
+  box-shadow: var(--shadow-cta);
+}
+button.primary:hover:not(:disabled) { background: var(--accent-bright); }
+
+label { cursor: pointer; }
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

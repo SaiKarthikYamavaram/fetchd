@@ -2,73 +2,159 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <link rel="stylesheet" href="theme.css" />
     <style>
-      :root { color-scheme: light dark; }
-      body {
-        width: 320px; margin: 0; padding: 0;
-        font: 13px system-ui, sans-serif;
-        color: #1a1a1a; background: #fff;
-      }
-      @media (prefers-color-scheme: dark) { body { color: #e8eaf0; background: #15181f; } }
+      body { width: 340px; }
+
       header {
-        display: flex; align-items: center; justify-content: space-between;
-        padding: 11px 14px; border-bottom: 1px solid rgba(128,128,128,0.2);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
       }
-      .title { font-size: 14px; font-weight: 650; }
-      .status { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; }
-      .dot { width: 7px; height: 7px; border-radius: 50%; background: #9aa0ad; }
-      .dot.up { background: #10b981; } .dot.down { background: #ef4444; }
-      .section { padding: 10px 14px; }
-      .muted { color: #8b909c; font-size: 12px; }
+      .brand { display: flex; align-items: center; gap: 10px; }
+      .logo {
+        display: grid;
+        place-items: center;
+        width: 26px;
+        height: 26px;
+        color: #fff;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        border-radius: 9px;
+        box-shadow: 0 4px 12px rgba(94, 106, 210, 0.45), var(--inner-hl);
+      }
+      .title { font-size: 14px; font-weight: 600; letter-spacing: -0.02em; }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 3px 9px;
+        font-size: 11.5px;
+        font-weight: 500;
+        color: var(--muted);
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+      }
+      .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+      .dot.up { background: var(--ok); box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 60%, transparent); }
+      .dot.down { background: var(--err); box-shadow: 0 0 8px color-mix(in srgb, var(--err) 60%, transparent); }
+
+      .section { padding: 12px 14px; }
+      .muted { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+
+      /* Each detection is a card, the same glass surface the app's rows use. */
       .item {
-        display: flex; align-items: center; gap: 9px;
-        padding: 8px 0; border-bottom: 1px solid rgba(128,128,128,0.12);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 11px;
+        margin-bottom: 8px;
+        background: var(--surface-glass);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-sm);
+        transition: border-color 0.25s var(--ease), transform 0.25s var(--ease);
       }
-      .item:last-child { border-bottom: none; }
+      .item:last-child { margin-bottom: 0; }
+      .item:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+
       .tag {
-        flex-shrink: 0; width: 34px; height: 34px; display: grid; place-items: center;
-        border-radius: 8px; font-size: 10px; font-weight: 700; text-transform: uppercase;
-        color: #6366f1; background: rgba(99,102,241,0.14);
+        flex-shrink: 0;
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        font-size: 9.5px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--accent-text);
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+        border-radius: 10px;
+        box-shadow: var(--inner-hl);
       }
+      /* Type is carried by hue as well as the three-letter label, matching the
+         app's row tiles. The accent tint above is the fallback. */
+      .tag[data-type="video"] { color: #f87171; background: rgba(248, 113, 113, 0.13); border-color: rgba(248, 113, 113, 0.26); }
+      .tag[data-type="audio"] { color: #a78bfa; background: rgba(167, 139, 250, 0.13); border-color: rgba(167, 139, 250, 0.26); }
+      .tag[data-type="archive"] { color: #f59e0b; background: rgba(245, 158, 11, 0.13); border-color: rgba(245, 158, 11, 0.26); }
+      .tag[data-type="document"] { color: #60a5fa; background: rgba(96, 165, 250, 0.13); border-color: rgba(96, 165, 250, 0.26); }
+      .tag[data-type="image"] { color: #34d399; background: rgba(52, 211, 153, 0.13); border-color: rgba(52, 211, 153, 0.26); }
+
       .popthumb {
-        flex-shrink: 0; width: 56px; height: 34px; object-fit: cover;
-        border-radius: 6px; background: rgba(128,128,128,0.2);
+        flex-shrink: 0;
+        width: 56px;
+        height: 34px;
+        object-fit: cover;
+        border-radius: 10px;
+        background: var(--surface-2);
+        border: 1px solid var(--border-strong);
       }
+
       .meta { flex: 1; min-width: 0; }
-      .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
-      .sub { font-size: 11px; color: #8b909c; }
-      button {
-        font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid rgba(128,128,128,0.25);
-        background: transparent; color: inherit; padding: 5px 10px;
+      .name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12.5px;
+        font-weight: 560;
+        letter-spacing: -0.005em;
       }
-      button.primary { color: #fff; background: linear-gradient(135deg,#6366f1,#8b5cf6); border: none; }
-      button.dl { padding: 5px 9px; font-size: 12px; }
-      button:disabled { opacity: 0.5; cursor: default; }
-      .bar { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid rgba(128,128,128,0.2); }
+      .sub {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      button.dl { flex-shrink: 0; padding: 6px 11px; font-size: 12px; }
+
+      .bar {
+        display: flex;
+        gap: 8px;
+        padding: 11px 14px;
+        border-top: 1px solid var(--border);
+      }
       .bar .grow { flex: 1; }
+
       footer {
-        display: flex; align-items: center; justify-content: space-between;
-        padding: 9px 14px; border-top: 1px solid rgba(128,128,128,0.2); font-size: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px 14px;
+        border-top: 1px solid var(--border);
+        font-size: 12.5px;
       }
-      label.toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
-      a { color: #6366f1; text-decoration: none; cursor: pointer; }
-      .foot-col { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
-      .foot-row { display: flex; align-items: center; justify-content: space-between; }
+      .foot-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
     </style>
   </head>
   <body>
+    <div class="ambient" aria-hidden="true"></div>
+
     <header>
-      <span class="title">fetchd</span>
+      <span class="brand">
+        <span class="logo" aria-hidden="true">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" />
+          </svg>
+        </span>
+        <span class="title">fetchd</span>
+      </span>
       <span class="status"><span id="dot" class="dot"></span><span id="statusText">Checking…</span></span>
     </header>
 
     <div class="section" id="videoSection" hidden>
       <div class="item">
         <img id="videoThumb" class="popthumb" alt="" hidden />
-        <span class="tag" id="videoTag" style="color:#ef4444;background:rgba(239,68,68,0.14)">VID</span>
+        <span class="tag" id="videoTag" data-type="video">VID</span>
         <div class="meta">
           <div class="name" id="videoName">This page's video</div>
-          <div class="sub">download with yt-dlp (quality set in the app)</div>
+          <div class="sub">yt-dlp &middot; quality set in the app</div>
         </div>
         <button class="dl primary" id="downloadVideo">Download</button>
       </div>
@@ -84,7 +170,7 @@
       <button id="clear">Clear</button>
     </div>
 
-    <footer class="foot-col">
+    <footer>
       <label class="toggle">
         <input type="checkbox" id="ask" />
         <span>Ask for folder &amp; options</span>

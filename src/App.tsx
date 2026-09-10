@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import {
-  Archive, BookOpen, Captions, Check, Code2, Copy, Disc, Download, ExternalLink,
-  File, FileText, Folder, Image, ListChecks, Loader2, Magnet, MoreVertical, Music,
-  Package, Pause, Pencil, Play, Plus, Presentation, RotateCcw, Search, Settings,
-  Sheet, Trash2, Type as TypeIcon, Video, X,
+  Archive, BookOpen, Captions, Check, CircleAlert, CircleCheckBig, Code2, Copy,
+  Disc, Download, ExternalLink, File, FileText, Folder, Image, ListChecks,
+  Loader2, Magnet, MoreVertical, Music, Package, Pause, Pencil, Play, Plus,
+  Presentation, RotateCcw, Search, Settings, Sheet, Trash2, Type as TypeIcon,
+  Video, X,
 } from "lucide-react";
 import {
   api,
@@ -716,7 +717,9 @@ function Row({
       >
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-sm font-medium" title={row.url}>{row.filename}</span>
-          <span className={cn("size-2 shrink-0 rounded-full", STATUS_DOT[row.status])} title={STATUS_LABEL[row.status]} />
+          {row.status !== "completed" && row.status !== "failed" && (
+            <span className={cn("size-2 shrink-0 rounded-full", STATUS_DOT[row.status])} title={STATUS_LABEL[row.status]} />
+          )}
         </div>
 
         {row.status !== "completed" && (
@@ -739,8 +742,6 @@ function Row({
                 {row.segments > 1 && <span>{row.segments} conns</span>}
               </>
             )}
-            {row.status === "completed" && <span className="text-emerald-600 dark:text-emerald-400">Completed</span>}
-            {row.status === "failed" && <span className="text-destructive">Failed</span>}
             {(row.status === "queued" || row.status === "interrupted") && (
               <span className="flex items-center gap-1">{STATUS_LABEL[row.status]} <Loader2 className="size-3 animate-spin" /></span>
             )}
@@ -750,6 +751,21 @@ function Row({
 
         {row.error && <p className="mt-1 truncate text-xs text-destructive">{row.error}</p>}
       </div>
+
+      {/* A Card-level sibling, not part of the text block above — so it
+          centers against the whole row exactly like the action icons next
+          to it, instead of sitting wherever it lands inside a stack of
+          text lines. */}
+      {row.status === "completed" && (
+        <Badge variant="secondary" className="shrink-0 gap-1 border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+          <CircleCheckBig className="size-3" /> Completed
+        </Badge>
+      )}
+      {row.status === "failed" && (
+        <Badge variant="secondary" className="shrink-0 gap-1 border border-destructive/20 bg-destructive/10 text-destructive">
+          <CircleAlert className="size-3" /> Failed
+        </Badge>
+      )}
 
       {/* Row actions must not toggle the row underneath them in selection
           mode; each button already handles its own click. */}

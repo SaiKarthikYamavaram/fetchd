@@ -189,6 +189,11 @@ pub fn build_client(session: &Session) -> Result<Client, String> {
         .user_agent(session.user_agent.clone())
         .default_headers(browser_headers(session))
         .connect_timeout(Duration::from_secs(10))
+        // Some mirrors answer a browser User-Agent with a cookie and a 302 to
+        // the same URL, and loop until the redirect limit for a client that
+        // drops the cookie. Only for sessions without their own Cookie
+        // header: reqwest skips the jar whenever one is already set.
+        .cookie_store(session.cookie.is_none())
         .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
         .build()
         .map_err(|e| format!("failed to build HTTP client: {e}"))
@@ -212,6 +217,8 @@ pub fn build_segment_client(session: &Session) -> Result<Client, String> {
         // Keeps sockets warm across retries. This is NOT what creates the
         // parallelism -- concurrent HTTP/1.1 requests already open their own.
         .pool_max_idle_per_host(MAX_SEGMENTS as usize)
+        // Same cookie-bounce mirrors as `build_client`.
+        .cookie_store(session.cookie.is_none())
         .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
         .build()
         .map_err(|e| format!("failed to build segment client: {e}"))
@@ -2348,6 +2355,48 @@ mod tests {
         p.reset();
         assert_eq!(p.total(), 0);
         assert_eq!(p.snapshot(), vec![0, 0]);
+    }
+
+    /// A mirror that answers with a cookie and a 302 to the same URL until the
+    /// cookie comes back, as mirror.nju.edu.cn does for browser agents.
+    /// Without a cookie jar the client loops until the redirect limit.
+    #[tokio::test]
+    async fn cookie_bounce_redirect_is_followed() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/f.bin", listener.local_addr().unwrap());
+        let location = url.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((sock, _)) = listener.accept().await else { return };
+                let location = location.clone();
+                tokio::spawn(async move {
+                    let (read, mut write) = sock.into_split();
+                    let mut lines = BufReader::new(read).lines();
+                    let mut has_cookie = false;
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if line.is_empty() {
+                            break;
+                        }
+                        has_cookie |= line.to_ascii_lowercase().starts_with("cookie:") && line.contains("bcheck=true");
+                    }
+                    let reply = if has_cookie {
+                        "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc".to_string()
+                    } else {
+                        format!(
+                            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nSet-Cookie: bcheck=true; Path=/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                    };
+                    let _ = write.write_all(reply.as_bytes()).await;
+                });
+            }
+        });
+
+        let (client, segment_client) = clients();
+        for c in [&client, &segment_client] {
+            let body = c.get(&url).send().await.unwrap().text().await.unwrap();
+            assert_eq!(body, "abc");
+        }
     }
 
     // -- Content-Disposition edges ------------------------------------------

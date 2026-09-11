@@ -46,6 +46,8 @@ import "./App.css";
 /// per-tick rate swings wildly; this keeps the number readable.
 const ALPHA = 0.25;
 
+const IS_MAC = /Mac/.test(navigator.userAgent);
+
 type Sample = { at: number; bytes: number; speed: number };
 
 const QUEUE_TITLE: Record<QueueFilter, string> = {
@@ -331,7 +333,8 @@ function App() {
     (r) => r.status === "paused" || r.status === "interrupted" || r.status === "failed",
   );
 
-  const order = visible.map((r) => r.id);
+  // Memoized so handleSelect stays stable and memo(Row) can skip idle rows.
+  const order = useMemo(() => visible.map((r) => r.id), [visible]);
 
   function toggleAll() {
     setSelected((prev) => selection.toggleAll(prev, order));
@@ -565,7 +568,7 @@ function App() {
                     </Button>
                   ) : (
                     <kbd className="hidden md:inline-flex h-4.5 select-none items-center gap-0.5 rounded border border-border/80 bg-muted/60 px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
-                      <span className="text-[11px]">⌘</span>F
+                      {IS_MAC ? <span className="text-[11px]">⌘</span> : "Ctrl+"}F
                     </kbd>
                   )}
                 </div>

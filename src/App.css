@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+@theme {
+  --breakpoint-xs: 30rem;
+}
+
 @custom-variant dark {
   &:is([data-theme="dark"] *) {
     @slot;

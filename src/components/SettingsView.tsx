@@ -31,8 +31,8 @@ function Section({
   icon, title, children,
 }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
   return (
-    <Card className="gap-4 border-border/80 bg-card/95 dark:bg-card/60 py-5 shadow-xs dark:shadow-sm backdrop-blur-sm">
-      <CardHeader className="px-5">
+    <Card className="gap-3 sm:gap-4 border-border/80 bg-card/95 dark:bg-card/60 py-4 sm:py-5 shadow-xs dark:shadow-sm backdrop-blur-sm">
+      <CardHeader className="px-3.5 sm:px-5">
         <CardTitle className="flex items-center gap-2.5 text-[13px] font-semibold uppercase tracking-wide text-muted-foreground">
           <span className="flex size-7 items-center justify-center rounded-full bg-primary/10 text-primary">
             {icon}
@@ -40,7 +40,7 @@ function Section({
           {title}
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4 px-5">{children}</CardContent>
+      <CardContent className="space-y-3.5 sm:space-y-4 px-3.5 sm:px-5">{children}</CardContent>
     </Card>
   );
 }
@@ -137,7 +137,7 @@ export function SettingsView() {
           Sort into folders by type (Video, Audio, Archives, …)
         </Label>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
           <div className="space-y-1.5">
             <Label>Concurrent downloads</Label>
             <Input

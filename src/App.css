@@ -132,7 +132,15 @@
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+    height: 100%;
     @apply bg-background text-foreground;
+  }
+
+  /* GPU acceleration for interactive surfaces */
+  [data-slot="card"] {
+    transform: translateZ(0);
+    backface-visibility: hidden;
   }
 
   /* Sleek modern scrollbars */

@@ -1,6 +1,6 @@
 import {
   Archive, CircleAlert, CircleCheckBig, FileText, Inbox, LayoutGrid, Monitor, Moon,
-  MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pause, Settings, Sun, Video, Zap,
+  MoreHorizontal, Pause, Settings, Sun, Video, Zap,
 } from "lucide-react";
 import type { Category } from "../lib/filetype";
 import { formatBytes } from "../lib/api";
@@ -38,7 +38,7 @@ const THEME_ICON: Record<string, React.ReactNode> = {
 export function Sidebar({
   queue, onQueue, category, onCategory, counts, totalSpeed,
   showSettings, onToggleSettings, theme, onCycleTheme,
-  collapsed, onToggleCollapsed,
+  collapsed,
 }: {
   queue: QueueFilter;
   onQueue: (q: QueueFilter) => void;
@@ -51,12 +51,11 @@ export function Sidebar({
   theme: string;
   onCycleTheme: () => void;
   collapsed: boolean;
-  onToggleCollapsed: () => void;
 }) {
   return (
     <aside
       className={cn(
-        "flex shrink-0 flex-col border-r border-border/60 bg-background/70 backdrop-blur-md transition-[width]",
+        "flex shrink-0 flex-col border-r border-border/60 bg-background/70 backdrop-blur-md transition-all duration-200 ease-in-out",
         collapsed ? "w-14" : "w-52",
       )}
     >
@@ -71,7 +70,7 @@ export function Sidebar({
         )}
       </div>
 
-      <nav className="flex-1 space-y-4 overflow-y-auto px-2 pb-2">
+      <nav className="flex-1 space-y-3 sm:space-y-4 overflow-y-auto px-2 pb-2">
         <div className="space-y-0.5">
           {!collapsed && <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">Queues</p>}
           {QUEUES.map((q) => (
@@ -105,10 +104,13 @@ export function Sidebar({
 
       <div className="space-y-1 border-t border-border/60 p-2">
         {totalSpeed > 0 && (
-          <div className={cn(
-            "flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1.5 text-xs font-medium text-primary",
-            collapsed && "justify-center px-0",
-          )}>
+          <div
+            title={collapsed ? `Speed: ${formatBytes(totalSpeed)}/s` : undefined}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1.5 text-xs font-medium text-primary",
+              collapsed && "justify-center px-0",
+            )}
+          >
             <span className="size-1.5 shrink-0 rounded-full bg-primary animate-pulse" />
             {!collapsed && <span className="truncate font-mono tabular-nums">{formatBytes(totalSpeed)}/s</span>}
           </div>
@@ -125,15 +127,6 @@ export function Sidebar({
             onClick={onToggleSettings}
           >
             <Settings />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="rounded-full"
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            onClick={onToggleCollapsed}
-          >
-            {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
           </Button>
         </div>
       </div>

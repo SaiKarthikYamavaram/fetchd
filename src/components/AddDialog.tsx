@@ -174,7 +174,7 @@ export function AddDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && dismiss()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[88vh] overflow-y-auto w-[calc(100vw-2rem)] sm:max-w-lg p-4 sm:p-6">
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
             <DialogTitle>{multi ? "Import links" : "Add download"}</DialogTitle>

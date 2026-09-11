@@ -26,9 +26,9 @@ export function DetailModal({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[88vh] overflow-y-auto w-[calc(100vw-2rem)] sm:max-w-lg p-4 sm:p-6">
         <DialogHeader>
-          <DialogTitle className="truncate" title={row.filename}>{row.filename}</DialogTitle>
+          <DialogTitle className="truncate text-base sm:text-lg" title={row.filename}>{row.filename}</DialogTitle>
         </DialogHeader>
 
         {row.thumbnail && (
@@ -42,7 +42,7 @@ export function DetailModal({
 
         <div className="space-y-1.5">
           <Progress value={percent ?? (downloaded > 0 ? 15 : 0)} />
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-muted-foreground">
             <span className="font-mono tabular-nums">{formatBytes(downloaded)}{total ? ` / ${formatBytes(total)}` : ""}</span>
             <span className="flex items-center gap-2 font-mono tabular-nums">
               {percent !== null ? `${percent.toFixed(1)}%` : "size unknown"}
@@ -51,7 +51,7 @@ export function DetailModal({
           </div>
         </div>
 
-        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+        <dl className="grid grid-cols-1 xs:grid-cols-[auto_1fr] gap-x-3 sm:gap-x-4 gap-y-1.5 sm:gap-y-2 text-xs sm:text-sm">
           <Field label="Status" value={cap(row.status)} />
           <Field label="Saved to" value={row.path} mono copyable />
           <Field label="Source URL" value={row.url} mono copyable />
@@ -84,16 +84,17 @@ export function DetailModal({
         {row.ranges.length > 1 && (
           <div className="space-y-2">
             <h3 className="text-sm font-medium">Segments</h3>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {row.ranges.map(([start, end], i) => {
                 const size = end - start + 1;
                 const got = row.done[i] ?? 0;
                 const pct = size > 0 ? Math.min(100, (got / size) * 100) : 100;
                 return (
-                  <div className="space-y-1" key={i}>
+                  <div className="space-y-1 rounded-md border border-border/60 bg-muted/30 p-2" key={i}>
                     <Progress value={pct} className="h-1.5" />
-                    <span className="text-xs text-muted-foreground">
-                      #{i + 1} · <span className="font-mono tabular-nums">{formatBytes(got)}/{formatBytes(size)}</span>
+                    <span className="text-[11px] text-muted-foreground flex items-center justify-between">
+                      <span>#{i + 1}</span>
+                      <span className="font-mono tabular-nums">{formatBytes(got)} / {formatBytes(size)}</span>
                     </span>
                   </div>
                 );

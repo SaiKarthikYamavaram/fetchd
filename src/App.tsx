@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import {
@@ -174,6 +174,20 @@ function App() {
     }).catch(() => {});
   }, []);
 
+  // Auto-collapse sidebar on compact displays (< 768px) to maximize download workspace
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth < 768) {
+        setSidebarCollapsed(true);
+      }
+    };
+    if (window.innerWidth < 768) {
+      setSidebarCollapsed(true);
+    }
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   /// Quick-access cycle from the sidebar: system → light → dark → system.
   /// Settings has the full picker; this is just the fast path.
   const cycleTheme = useCallback(() => {
@@ -288,18 +302,20 @@ function App() {
 
   const sidebarCounts = { ...queueCounts, ...categoryCounts };
 
+  const deferredQuery = useDeferredValue(query);
+
   const visible = useMemo(() => {
     const byCategory = category === "all"
       ? queueRows
       : queueRows.filter((r) => categoryOf(r.filename) === category);
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     if (!q) return byCategory;
     // Match the URL too: a name that came back as "download.bin" is often only
     // findable by where it came from.
     return byCategory.filter(
       (r) => r.filename.toLowerCase().includes(q) || r.url.toLowerCase().includes(q),
     );
-  }, [queueRows, category, query]);
+  }, [queueRows, category, deferredQuery]);
 
   // Look these up from the current rows each render so the open modals reflect
   // live status; close automatically if the entry is gone.
@@ -317,10 +333,6 @@ function App() {
 
   const order = visible.map((r) => r.id);
 
-  function toggleRow(id: string, extend: boolean) {
-    setSelected((prev) => selection.toggle(prev, order, id, extend));
-  }
-
   function toggleAll() {
     setSelected((prev) => selection.toggleAll(prev, order));
   }
@@ -328,6 +340,16 @@ function App() {
   function clearSelection() {
     setSelected(selection.EMPTY);
   }
+
+  const handleOpen = useCallback((id: string) => setDetailId(id), []);
+  const handleDelete = useCallback((id: string) => setDeleteId(id), []);
+  const handleRename = useCallback((id: string) => setRenameId(id), []);
+  const handleSelect = useCallback(
+    (id: string, extend: boolean) => {
+      setSelected((prev) => selection.toggle(prev, order, id, extend));
+    },
+    [order],
+  );
 
   /// Leaving the mode drops the selection with it: a hidden selection that
   /// reappears next time you enter would act on rows nobody remembers picking.
@@ -354,6 +376,13 @@ function App() {
       const el = e.target as HTMLElement | null;
       const typing = el?.tagName === "INPUT" || el?.tagName === "TEXTAREA" || el?.isContentEditable;
       const mod = e.ctrlKey || e.metaKey;
+
+      // Toggle sidebar shortcut (Ctrl+B / Cmd+B)
+      if (mod && (e.key === "b" || e.key === "B")) {
+        e.preventDefault();
+        setSidebarCollapsed((c) => !c);
+        return;
+      }
 
       // Focus the filter. Works from anywhere, typing included.
       if (mod && e.key === "f") {
@@ -407,7 +436,10 @@ function App() {
       <div aria-hidden="true" className="pointer-events-none fixed -bottom-40 left-1/4 -z-10 size-96 rounded-full bg-fuchsia-500/4 dark:bg-fuchsia-500/10 blur-3xl" />
 
       <Toaster />
-      <Titlebar />
+      <Titlebar
+        onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
+        sidebarCollapsed={sidebarCollapsed}
+      />
 
       <div className="flex flex-1 overflow-hidden">
       <Sidebar
@@ -422,23 +454,22 @@ function App() {
         theme={theme}
         onCycleTheme={cycleTheme}
         collapsed={sidebarCollapsed}
-        onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
       />
 
-      <main className="flex-1 overflow-y-auto px-4 py-4">
+      <main className="flex-1 overflow-y-auto px-2.5 sm:px-4 py-3 sm:py-4">
         {showSettings ? (
           <SettingsView />
         ) : (
           <div className="mx-auto max-w-5xl w-full">
-            <div className="flex items-center justify-between gap-3">
-              <div>
+            <div className="flex flex-wrap sm:flex-nowrap items-start sm:items-center justify-between gap-2.5 sm:gap-3">
+              <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h1 className="text-lg font-semibold">{title}</h1>
+                  <h1 className="text-base sm:text-lg font-semibold truncate">{title}</h1>
                   {narrowed && (
                     <Button
                       variant="ghost"
                       size="xs"
-                      className="h-5 gap-1 rounded-full px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                      className="h-5 gap-1 rounded-full px-2 text-[11px] text-muted-foreground hover:text-foreground shrink-0"
                       onClick={() => { setQueue("all"); setCategory("all"); }}
                       title="Clear filter"
                     >
@@ -446,31 +477,60 @@ function App() {
                     </Button>
                   )}
                 </div>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-xs sm:text-sm text-muted-foreground">
                   {visible.length} {visible.length === 1 ? "item" : "items"}
                 </p>
               </div>
               {/* Global queue controls: these act on everything, not just what
                   the current queue/category filter shows. */}
-              <div className="flex items-center gap-1.5">
-                <Button variant="outline" size="sm" onClick={() => api.pauseAll().catch(report)} disabled={!active.length}>
-                  <Pause /> Pause all
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => api.resumeAll().catch(report)} disabled={!stopped.length}>
-                  <Play /> Resume all
+              <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2 sm:px-3 text-xs sm:text-sm"
+                  onClick={() => api.pauseAll().catch(report)}
+                  disabled={!active.length}
+                  title="Pause all downloads"
+                >
+                  <Pause className="size-3.5" />
+                  <span className="hidden md:inline">Pause all</span>
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
-                  className={selectMode ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary" : undefined}
+                  className="h-8 px-2 sm:px-3 text-xs sm:text-sm"
+                  onClick={() => api.resumeAll().catch(report)}
+                  disabled={!stopped.length}
+                  title="Resume all downloads"
+                >
+                  <Play className="size-3.5" />
+                  <span className="hidden md:inline">Resume all</span>
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={cn(
+                    "h-8 px-2 sm:px-3 text-xs sm:text-sm",
+                    selectMode && "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
+                  )}
                   onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
                   disabled={rows.length === 0}
                   title={selectMode ? "Leave selection mode (Esc)" : "Pick several downloads to act on at once"}
                 >
-                  <ListChecks /> Select
+                  <ListChecks className="size-3.5" />
+                  <span className="hidden sm:inline">Select</span>
                 </Button>
                 {completed.length + failed.length > 0 && (
-                  <Button variant="ghost" size="sm" onClick={() => api.clearHistory().catch(report)}>Clear finished</Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 sm:px-3 text-xs sm:text-sm"
+                    onClick={() => api.clearHistory().catch(report)}
+                    title="Clear finished downloads"
+                  >
+                    <span className="hidden sm:inline">Clear finished</span>
+                    <span className="sm:hidden">Clear</span>
+                  </Button>
                 )}
               </div>
             </div>
@@ -480,7 +540,7 @@ function App() {
                 so it opens the dialog that asks for them. One elevated bar
                 rather than three loose controls floating on the page. */}
             <div className="mt-3 flex items-center gap-1 rounded-xl border border-border/80 bg-card/90 dark:bg-card/60 p-1.5 shadow-xs dark:shadow-sm backdrop-blur-sm transition-all focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/10">
-              <div className="relative flex-1">
+              <div className="relative flex-1 min-w-0">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   ref={searchRef}
@@ -490,20 +550,25 @@ function App() {
                   spellCheck={false}
                   aria-label="Filter downloads"
                   autoFocus
-                  className="border-0 bg-transparent pl-8 pr-8 shadow-none focus-visible:ring-0"
+                  className="border-0 bg-transparent pl-8 pr-12 sm:pr-16 shadow-none focus-visible:ring-0 text-sm"
                 />
-                {query && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2"
-                    onClick={() => { setQuery(""); searchRef.current?.focus(); }}
-                    title="Clear filter"
-                  >
-                    <X />
-                  </Button>
-                )}
+                <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                  {query ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={() => { setQuery(""); searchRef.current?.focus(); }}
+                      title="Clear filter"
+                    >
+                      <X className="size-3.5" />
+                    </Button>
+                  ) : (
+                    <kbd className="hidden md:inline-flex h-4.5 select-none items-center gap-0.5 rounded border border-border/80 bg-muted/60 px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+                      <span className="text-[11px]">⌘</span>F
+                    </kbd>
+                  )}
+                </div>
               </div>
               <div className="h-5 w-px shrink-0 bg-border" />
               {/* Both ways of bringing a download in, side by side and spelled
@@ -511,19 +576,23 @@ function App() {
               <Button
                 variant="ghost"
                 type="button"
-                className="shrink-0 rounded-lg"
+                className="shrink-0 rounded-lg h-8 px-2 sm:px-3 text-xs sm:text-sm"
+                title="Import URLs"
                 onClick={() => { setPendingMulti(true); setPendingUrl(""); }}
               >
-                <Download /> Import
+                <Download className="size-3.5" />
+                <span className="hidden sm:inline">Import</span>
               </Button>
               {/* A plus, not another arrow: Import brings a file in, Add makes
                   a new entry, and the brand already owns the download glyph. */}
               <Button
                 type="button"
-                className="shrink-0 rounded-lg bg-gradient-to-r from-primary to-violet-500 shadow-sm transition-shadow hover:opacity-90 hover:shadow-md"
+                className="shrink-0 rounded-lg h-8 px-2.5 sm:px-3 text-xs sm:text-sm bg-gradient-to-r from-primary to-violet-500 shadow-sm transition-shadow hover:opacity-90 hover:shadow-md"
+                title="Add download"
                 onClick={() => { setPendingMulti(false); setPendingUrl(""); }}
               >
-                <Plus /> Add
+                <Plus className="size-3.5" />
+                <span className="hidden sm:inline">Add</span>
               </Button>
             </div>
 
@@ -531,25 +600,30 @@ function App() {
                 starts, rather than a bar of its own that pushes the list
                 down every time selection mode is entered. */}
             {selectMode && (
-              <div className="mt-3 flex h-9 items-center gap-2 rounded-xl border border-border/80 bg-card/90 dark:bg-card/80 px-3 shadow-xs dark:shadow-sm backdrop-blur-sm">
-                <Checkbox
-                  checked={allVisibleSelected ? true : selectedRows.length > 0 ? "indeterminate" : false}
-                  onCheckedChange={toggleAll}
-                  disabled={visible.length === 0}
-                  title={allVisibleSelected ? "Deselect all" : "Select all"}
-                />
-                <span className="text-sm text-muted-foreground">{selectedRows.length} selected</span>
-                <div className="ml-auto flex items-center gap-1.5">
-                  <Button size="sm" variant="outline" onClick={() => api.bulk(selectedIds, "pause").catch(report)} disabled={!canPause}>
-                    <Pause /> Pause
+              <div className="mt-3 flex min-h-9 flex-wrap items-center justify-between gap-2 rounded-xl border border-border/80 bg-card/90 dark:bg-card/80 px-3 py-1 shadow-xs dark:shadow-sm backdrop-blur-sm">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={allVisibleSelected ? true : selectedRows.length > 0 ? "indeterminate" : false}
+                    onCheckedChange={toggleAll}
+                    disabled={visible.length === 0}
+                    title={allVisibleSelected ? "Deselect all" : "Select all"}
+                  />
+                  <span className="text-xs sm:text-sm text-muted-foreground font-medium">{selectedRows.length} selected</span>
+                </div>
+                <div className="flex items-center gap-1 sm:gap-1.5">
+                  <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => api.bulk(selectedIds, "pause").catch(report)} disabled={!canPause} title="Pause selected">
+                    <Pause className="size-3" />
+                    <span className="hidden sm:inline">Pause</span>
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => api.bulk(selectedIds, "resume").catch(report)} disabled={!canResume}>
-                    <Play /> Resume
+                  <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => api.bulk(selectedIds, "resume").catch(report)} disabled={!canResume} title="Resume selected">
+                    <Play className="size-3" />
+                    <span className="hidden sm:inline">Resume</span>
                   </Button>
-                  <Button size="sm" variant="destructive" onClick={() => setDeletingSelection(true)} disabled={selectedRows.length === 0}>
-                    <Trash2 /> Remove
+                  <Button size="sm" variant="destructive" className="h-7 px-2 text-xs" onClick={() => setDeletingSelection(true)} disabled={selectedRows.length === 0} title="Remove selected">
+                    <Trash2 className="size-3" />
+                    <span className="hidden sm:inline">Remove</span>
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={exitSelectMode} title="Leave selection mode (Esc)">
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={exitSelectMode} title="Leave selection mode (Esc)">
                     Done
                   </Button>
                 </div>
@@ -564,13 +638,13 @@ function App() {
                   liveBytes={live.current.get(row.id)}
                   liveTotal={liveTotal.current.get(row.id)}
                   speed={samples.current.get(row.id)?.speed ?? 0}
-                  onOpen={() => setDetailId(row.id)}
-                  onDelete={() => setDeleteId(row.id)}
-                  onRename={() => setRenameId(row.id)}
+                  onOpen={handleOpen}
+                  onDelete={handleDelete}
+                  onRename={handleRename}
                   onFail={report}
                   selectMode={selectMode}
                   selected={selected.ids.has(row.id)}
-                  onSelect={(extend) => toggleRow(row.id, extend)}
+                  onSelect={handleSelect}
                 />
               ))}
               {visible.length === 0 && (
@@ -735,7 +809,7 @@ function hostnameOf(url: string): string | null {
   }
 }
 
-function Row({
+const Row = memo(function Row({
   row, liveBytes, liveTotal, speed, onOpen, onDelete, onRename,
   selectMode, selected, onSelect, onFail,
 }: {
@@ -743,12 +817,12 @@ function Row({
   liveBytes?: number;
   liveTotal?: number;
   speed: number;
-  onOpen: () => void;
-  onDelete: () => void;
-  onRename: () => void;
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+  onRename: (id: string) => void;
   selectMode: boolean;
   selected: boolean;
-  onSelect: (extend: boolean) => void;
+  onSelect: (id: string, extend: boolean) => void;
   /// Surfaces a failed command; a click handler has nowhere else to put one.
   onFail: (e: unknown) => void;
 }) {
@@ -771,27 +845,27 @@ function Row({
   return (
     <Card
       className={cn(
-        "flex-row items-center gap-3 bg-card/95 dark:bg-card/75 p-3 backdrop-blur-sm transition-all shadow-[0_1px_3px_rgba(0,0,0,0.05),0_1px_2px_rgba(0,0,0,0.02)] border-border/80 hover:-translate-y-0.5 hover:shadow-[0_8px_20px_-4px_rgba(0,0,0,0.08)] dark:hover:shadow-primary/5",
+        "flex-row items-center gap-2.5 sm:gap-3 bg-card/95 dark:bg-card/75 p-2.5 sm:p-3 backdrop-blur-sm transition-all shadow-[0_1px_3px_rgba(0,0,0,0.05),0_1px_2px_rgba(0,0,0,0.02)] border-border/80 hover:-translate-y-0.5 hover:shadow-[0_8px_20px_-4px_rgba(0,0,0,0.08)] dark:hover:shadow-primary/5",
         selected ? "border-primary bg-accent/30 dark:bg-accent/40 ring-1 ring-primary/25" : "hover:border-primary/50",
         selectMode && "cursor-pointer",
       )}
       // In selection mode the whole row is the target, so the tile is an
       // indicator rather than the only thing you can hit.
-      onClick={selectMode ? (e) => onSelect(e.shiftKey) : undefined}
+      onClick={selectMode ? (e) => onSelect(row.id, e.shiftKey) : undefined}
     >
       {/* Selection has no column of its own: a picked row swaps its file-type
           tile for a filled check, so entering the mode never re-flows the row
           and an idle list carries no controls at all. */}
-      <div className="relative flex size-10 shrink-0 items-center justify-center">
+      <div className="relative flex size-9 sm:size-10 shrink-0 items-center justify-center">
         {selected ? (
-          <span className="flex size-10 items-center justify-center rounded-md bg-primary text-primary-foreground" role="img" aria-label="Selected">
-            <Check className="size-5" />
+          <span className="flex size-9 sm:size-10 items-center justify-center rounded-md bg-primary text-primary-foreground" role="img" aria-label="Selected">
+            <Check className="size-4 sm:size-5" />
           </span>
         ) : preview ? (
           // Video preview thumbnail; overlay a ring while downloading.
           <>
             <img
-              className="size-10 rounded-md object-cover"
+              className="size-9 sm:size-10 rounded-md object-cover"
               src={preview}
               alt=""
               loading="lazy"
@@ -799,21 +873,21 @@ function Row({
             />
             {running && percent !== null && (
               <span className="absolute -right-1 -bottom-1 rounded-full bg-background">
-                <RingProgress percent={percent} size={20} />
+                <RingProgress percent={percent} size={18} />
               </span>
             )}
           </>
         ) : running && percent !== null ? (
-          <span className="flex size-10 items-center justify-center rounded-md bg-muted">
-            <RingProgress percent={percent} size={36} />
+          <span className="flex size-9 sm:size-10 items-center justify-center rounded-md bg-muted">
+            <RingProgress percent={percent} size={32} />
           </span>
         ) : running ? (
           // Unknown size: no percentage to show, so a quiet spinner.
-          <span className="flex size-10 items-center justify-center rounded-md bg-muted">
-            <Loader2 className="size-5 animate-spin text-primary" />
+          <span className="flex size-9 sm:size-10 items-center justify-center rounded-md bg-muted">
+            <Loader2 className="size-4 sm:size-5 animate-spin text-primary" />
           </span>
         ) : (
-          <span className={cn("flex size-10 items-center justify-center rounded-md", kind.className)}>
+          <span className={cn("flex size-9 sm:size-10 items-center justify-center rounded-md", kind.className)}>
             {kind.icon}
           </span>
         )}
@@ -824,7 +898,7 @@ function Row({
           In selection mode the row itself owns the click and this is inert. */}
       <div
         className={cn("min-w-0 flex-1", !selectMode && "cursor-pointer")}
-        onClick={selectMode ? undefined : onOpen}
+        onClick={selectMode ? undefined : () => onOpen(row.id)}
         title={selectMode ? undefined : "View details"}
         role={selectMode ? undefined : "button"}
         tabIndex={selectMode ? undefined : 0}
@@ -834,18 +908,24 @@ function Row({
             : (e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  onOpen();
+                  onOpen(row.id);
                 }
               }
         }
       >
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-1.5 sm:gap-2">
           <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-sm font-medium" title={row.url}>{row.filename}</span>
+            <span className="truncate text-xs sm:text-sm font-medium" title={row.url}>{row.filename}</span>
             {domain && (
-              <span className="shrink-0 truncate rounded-full border border-border/60 bg-muted/70 px-2 py-0.5 text-[10px] font-mono text-muted-foreground max-w-36">
+              <span className="hidden xs:inline-block shrink-0 truncate rounded-full border border-border/60 bg-muted/70 px-1.5 sm:px-2 py-0.5 text-[9px] sm:text-[10px] font-mono text-muted-foreground max-w-24 sm:max-w-36">
                 {domain}
               </span>
+            )}
+            {row.status === "completed" && (
+              <CircleCheckBig className="size-3.5 shrink-0 text-emerald-500 sm:hidden" />
+            )}
+            {row.status === "failed" && (
+              <CircleAlert className="size-3.5 shrink-0 text-destructive sm:hidden" />
             )}
           </span>
           {row.status !== "completed" && row.status !== "failed" && (
@@ -860,18 +940,18 @@ function Row({
           />
         )}
 
-        <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] sm:text-xs text-muted-foreground">
           <span className="font-mono tabular-nums">
             {formatBytes(downloaded)}
             {total ? ` / ${formatBytes(total)}` : " · unknown size"}
           </span>
-          <span className="flex items-center gap-2">
+          <span className="flex items-center gap-1.5 sm:gap-2 font-mono tabular-nums">
             {running && (
-              <span className="flex items-center gap-2 font-mono tabular-nums">
+              <>
                 <span className="font-medium text-primary">↓ {formatBytes(speed)}/s</span>
                 {eta && <span>{eta} left</span>}
-                {row.segments > 1 && <span>{row.segments} conns</span>}
-              </span>
+                {row.segments > 1 && <span className="hidden xs:inline">{row.segments} conns</span>}
+              </>
             )}
             {(row.status === "queued" || row.status === "interrupted") && (
               <span className="flex items-center gap-1">{STATUS_LABEL[row.status]} <Loader2 className="size-3 animate-spin" /></span>
@@ -888,35 +968,35 @@ function Row({
           to it, instead of sitting wherever it lands inside a stack of
           text lines. */}
       {row.status === "completed" && (
-        <Badge variant="secondary" className="shrink-0 gap-1 border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+        <Badge variant="secondary" className="shrink-0 hidden sm:inline-flex gap-1 border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px]">
           <CircleCheckBig className="size-3" /> Completed
         </Badge>
       )}
       {row.status === "failed" && (
-        <Badge variant="secondary" className="shrink-0 gap-1 border border-destructive/20 bg-destructive/10 text-destructive">
+        <Badge variant="secondary" className="shrink-0 hidden sm:inline-flex gap-1 border border-destructive/20 bg-destructive/10 text-destructive text-[11px]">
           <CircleAlert className="size-3" /> Failed
         </Badge>
       )}
 
       {/* Row actions must not toggle the row underneath them in selection
           mode; each button already handles its own click. */}
-      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-0.5 sm:gap-1" onClick={(e) => e.stopPropagation()}>
         {(row.status === "downloading" || row.status === "queued") && (
-          <Button variant="ghost" size="icon" title="Pause" onClick={() => api.pause(row.id).catch(onFail)}><Pause /></Button>
+          <Button variant="ghost" size="icon" className="size-8" title="Pause" onClick={() => api.pause(row.id).catch(onFail)}><Pause className="size-4" /></Button>
         )}
         {(row.status === "paused" || row.status === "interrupted") && (
-          <Button variant="ghost" size="icon" title="Resume" onClick={() => api.resume(row.id).catch(onFail)}><Play /></Button>
+          <Button variant="ghost" size="icon" className="size-8" title="Resume" onClick={() => api.resume(row.id).catch(onFail)}><Play className="size-4" /></Button>
         )}
         {row.status === "failed" && (
-          <Button variant="ghost" size="icon" title="Retry" onClick={() => api.retry(row.id).catch(onFail)}><RotateCcw /></Button>
+          <Button variant="ghost" size="icon" className="size-8" title="Retry" onClick={() => api.retry(row.id).catch(onFail)}><RotateCcw className="size-4" /></Button>
         )}
         {row.status === "completed" && (
-          <Button variant="ghost" size="icon" title="Open file" onClick={() => api.openFile(row.path).catch(onFail)}><ExternalLink /></Button>
+          <Button variant="ghost" size="icon" className="size-8" title="Open file" onClick={() => api.openFile(row.path).catch(onFail)}><ExternalLink className="size-4" /></Button>
         )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" title="More">
-              <MoreVertical />
+            <Button variant="ghost" size="icon" className="size-8" title="More options">
+              <MoreVertical className="size-4" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -932,12 +1012,12 @@ function Row({
                 pause first — hide the option rather than offer a guaranteed
                 error. */}
             {row.status !== "downloading" && (
-              <DropdownMenuItem onClick={onRename}>
+              <DropdownMenuItem onClick={() => onRename(row.id)}>
                 <Pencil /> Rename
               </DropdownMenuItem>
             )}
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onClick={onDelete}>
+            <DropdownMenuItem variant="destructive" onClick={() => onDelete(row.id)}>
               <Trash2 /> Remove
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -945,7 +1025,7 @@ function Row({
       </div>
     </Card>
   );
-}
+});
 
 /// Glyph per kind. The kind itself comes from lib/filetype, which is where the
 /// extension table lives and is tested.

@@ -172,7 +172,15 @@ where
         // Merger lines instead.)
         .arg("--progress-template")
         .arg("download:FDPROG|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s")
-        .arg("--no-warnings");
+        .arg("--no-warnings")
+        // HLS/DASH streams arrive as many small fragments; fetched one at a
+        // time they are latency-bound, not bandwidth-bound.
+        .arg("--concurrent-fragments")
+        .arg("8")
+        .arg("--retries")
+        .arg("10")
+        .arg("--fragment-retries")
+        .arg("10");
 
     for a in format_args(quality) {
         cmd.arg(a);

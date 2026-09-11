@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fs4::tokio::AsyncFileExt;
@@ -50,6 +50,11 @@ pub const MIN_SEGMENTED_SIZE: u64 = 4 * 1024 * 1024;
 
 pub const DEFAULT_SEGMENTS: u32 = 8;
 pub const MAX_SEGMENTS: u32 = 8;
+
+/// A finished connection takes over half of the largest unfinished range, but
+/// only when each half is at least this big: a fresh connection's handshake
+/// costs more than a smaller tail saves.
+pub const MIN_SPLIT_BYTES: u64 = 1024 * 1024;
 
 /// Refuse to start unless this much space remains free beyond the file itself.
 const DISK_HEADROOM: u64 = 64 * 1024 * 1024;
@@ -618,10 +623,30 @@ impl SegErr {
 ///   dangerous direction: after a power cut, resume would seek past bytes that
 ///   were never written and leave a permanent zero-filled hole in the file.
 ///   Recording behind the frontier merely re-downloads a little.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SegmentProgress {
     live: AtomicU64,
     durable: AtomicU64,
+    /// Where this segment sits in the file. `end` shrinks when another
+    /// connection takes over its tail, so it is read under the same lock that
+    /// guards the claim frontier.
+    bounds: Mutex<Bounds>,
+}
+
+/// `frontier` is the absolute offset up to which the worker has claimed bytes
+/// (written or about to be). A split always cuts above it, so a chunk already
+/// in flight can never land in the range handed to another connection.
+#[derive(Debug, Clone, Copy)]
+struct Bounds {
+    start: u64,
+    end: u64,
+    frontier: u64,
+}
+
+impl Default for SegmentProgress {
+    fn default() -> Self {
+        SegmentProgress::starting_at(0)
+    }
 }
 
 impl SegmentProgress {
@@ -629,7 +654,67 @@ impl SegmentProgress {
         SegmentProgress {
             live: AtomicU64::new(offset),
             durable: AtomicU64::new(offset),
+            bounds: Mutex::new(Bounds { start: 0, end: u64::MAX, frontier: 0 }),
         }
+    }
+
+    fn with_range(start: u64, end: u64) -> Self {
+        let seg = SegmentProgress::starting_at(0);
+        seg.place(start, end);
+        seg
+    }
+
+    fn place(&self, start: u64, end: u64) {
+        let mut b = self.bounds.lock().unwrap();
+        *b = Bounds { start, end, frontier: start + self.live() };
+    }
+
+    fn start(&self) -> u64 {
+        self.bounds.lock().unwrap().start
+    }
+
+    fn end(&self) -> u64 {
+        self.bounds.lock().unwrap().end
+    }
+
+    /// Reserve up to `len` bytes at the write position, clamped to the
+    /// (possibly shrunk) end. Returns how many may be written; 0 means the
+    /// segment is complete.
+    fn claim(&self, len: usize) -> usize {
+        let mut b = self.bounds.lock().unwrap();
+        let pos = b.start + self.live();
+        let room = b.end.saturating_add(1).saturating_sub(pos);
+        let n = room.min(len as u64);
+        b.frontier = b.frontier.max(pos + n);
+        n as usize
+    }
+
+    /// Bytes not yet claimed. Unplaced counters (yt-dlp, whole-file) have no
+    /// end and report 0, so they are never split.
+    fn remaining(&self) -> u64 {
+        let b = self.bounds.lock().unwrap();
+        if b.end == u64::MAX {
+            return 0;
+        }
+        let pos = b.frontier.max(b.start + self.live());
+        b.end.saturating_add(1).saturating_sub(pos)
+    }
+
+    /// Give away the upper half of what is left. Returns the range given away.
+    fn split(&self) -> Option<(u64, u64)> {
+        let mut b = self.bounds.lock().unwrap();
+        if b.end == u64::MAX {
+            return None;
+        }
+        let pos = b.frontier.max(b.start + self.live());
+        let left = b.end.saturating_add(1).saturating_sub(pos);
+        if left < 2 * MIN_SPLIT_BYTES {
+            return None;
+        }
+        let mid = pos + left / 2;
+        let taken = (mid, b.end);
+        b.end = mid - 1;
+        Some(taken)
     }
 
     fn add(&self, n: u64) {
@@ -676,49 +761,96 @@ impl SegmentProgress {
 /// reject a perfectly good file.
 #[derive(Clone)]
 pub struct Progress {
-    counters: Arc<Vec<Arc<SegmentProgress>>>,
+    /// Grows when a finished connection takes over half of another's range.
+    counters: Arc<Mutex<Vec<Arc<SegmentProgress>>>>,
+    /// Set once `set_layout` has pinned each counter to a byte range. Until
+    /// then (yt-dlp, whole-file) there is no layout worth persisting.
+    placed: Arc<AtomicBool>,
 }
 
 impl Progress {
     pub fn new(n: usize) -> Self {
-        Progress {
-            counters: Arc::new((0..n.max(1)).map(|_| Arc::new(SegmentProgress::default())).collect()),
-        }
+        Progress::from_counters((0..n.max(1)).map(|_| SegmentProgress::default()).collect())
     }
 
     /// Rebuild from persisted per-segment offsets so a resumed download picks
     /// up exactly where the last durable checkpoint left it.
     pub fn resumed(done: &[u64]) -> Self {
+        Progress::from_counters(done.iter().map(|d| SegmentProgress::starting_at(*d)).collect())
+    }
+
+    fn from_counters(counters: Vec<SegmentProgress>) -> Self {
         Progress {
-            counters: Arc::new(
-                done.iter()
-                    .map(|d| Arc::new(SegmentProgress::starting_at(*d)))
-                    .collect::<Vec<_>>(),
-            ),
+            counters: Arc::new(Mutex::new(counters.into_iter().map(Arc::new).collect())),
+            placed: Arc::new(AtomicBool::new(false)),
         }
     }
 
     fn counter(&self, i: usize) -> Arc<SegmentProgress> {
-        Arc::clone(&self.counters[i])
+        Arc::clone(&self.counters.lock().unwrap()[i])
+    }
+
+    /// Pin each counter to its byte range. Counters of the wrong shape (a
+    /// queue.json from a different plan) are replaced with fresh zeros:
+    /// re-downloading is safe, trusting mismatched offsets is not.
+    fn set_layout(&self, ranges: &[(u64, u64)]) {
+        let mut counters = self.counters.lock().unwrap();
+        if counters.len() != ranges.len() {
+            *counters = ranges.iter().map(|_| Arc::new(SegmentProgress::default())).collect();
+        }
+        for (c, &(start, end)) in counters.iter().zip(ranges) {
+            c.place(start, end);
+        }
+        self.placed.store(true, Ordering::Relaxed);
+    }
+
+    /// Split the segment with the most bytes left and return the index of the
+    /// new counter covering its upper half.
+    fn split_largest(&self) -> Option<usize> {
+        let mut counters = self.counters.lock().unwrap();
+        let victim = Arc::clone(counters.iter().max_by_key(|c| c.remaining())?);
+        let (start, end) = victim.split()?;
+        counters.push(Arc::new(SegmentProgress::with_range(start, end)));
+        Some(counters.len() - 1)
     }
 
     /// Set the first counter to an absolute byte count (yt-dlp path).
     pub fn set_absolute(&self, n: u64) {
-        self.counters[0].set(n);
+        self.counters.lock().unwrap()[0].set(n);
     }
 
     /// What the user sees.
     pub fn total(&self) -> u64 {
-        self.counters.iter().map(|c| c.live()).sum()
+        self.counters.lock().unwrap().iter().map(|c| c.live()).sum()
     }
 
-    /// What gets written to `queue.json`: durable bytes only.
+    /// Durable bytes only. Persistence goes through `layout`, which also
+    /// carries the ranges; this is the tests' shorthand.
+    #[cfg(test)]
     pub fn snapshot(&self) -> Vec<u64> {
-        self.counters.iter().map(|c| c.durable()).collect()
+        self.counters.lock().unwrap().iter().map(|c| c.durable()).collect()
+    }
+
+    /// Ranges and durable offsets read together, so a split landing between
+    /// two separate reads can never persist mismatched lengths. Ranges are
+    /// `None` until `set_layout` ran; the plan's own ranges stand then.
+    pub fn layout(&self) -> (Option<Vec<(u64, u64)>>, Vec<u64>) {
+        let counters = self.counters.lock().unwrap();
+        let done = counters.iter().map(|c| c.durable()).collect();
+        let ranges = self.placed.load(Ordering::Relaxed).then(|| {
+            counters
+                .iter()
+                .map(|c| {
+                    let b = c.bounds.lock().unwrap();
+                    (b.start, b.end)
+                })
+                .collect()
+        });
+        (ranges, done)
     }
 
     fn reset(&self) {
-        for c in self.counters.iter() {
+        for c in self.counters.lock().unwrap().iter() {
             c.reset();
         }
     }
@@ -1018,8 +1150,6 @@ fn human_bytes(n: u64) -> String {
 async fn run_segment(
     client: Client,
     url: Url,
-    start: u64,
-    end: u64,
     path: PathBuf,
     validator: Option<String>,
     done: Arc<SegmentProgress>,
@@ -1032,13 +1162,24 @@ async fn run_segment(
         if token.is_cancelled() {
             return Err(SegErr::Cancelled);
         }
-        let offset = start + done.live();
+        // Re-read every attempt: another connection may have taken the tail.
+        let end = done.end();
+        let offset = done.start() + done.live();
         if offset > end {
             return Ok(());
         }
 
         let before = done.durable();
-        match stream_range(&client, &url, offset, end, &path, &validator, &done, &throttle, &token).await {
+        let result = match stream_range(&client, &url, offset, end, &path, &validator, &done, &throttle, &token).await {
+            // A body that ends before the range does is a dropped connection,
+            // not a finished segment. Treating it as done left a hole that
+            // only the final length check caught, failing the whole download.
+            Ok(()) if done.start() + done.live() <= done.end() => {
+                Err(SegErr::Retryable("server closed the connection early".into()))
+            }
+            other => other,
+        };
+        match result {
             Ok(()) => return Ok(()),
             Err(SegErr::Cancelled) => return Err(SegErr::Cancelled),
             Err(SegErr::Fatal(m)) => return Err(SegErr::Fatal(m)),
@@ -1140,19 +1281,26 @@ async fn stream_range(
         let Some(chunk) = next else { break };
         let chunk = chunk.map_err(|e| SegErr::Retryable(format!("transfer failed: {e}")))?;
 
+        // Claim before writing: if another connection took over our tail, the
+        // part of this chunk past the new end belongs to it and is dropped.
+        let n = done.claim(chunk.len());
+        if n == 0 {
+            break;
+        }
+
         // Spend bandwidth budget before writing. Stays cancellable so a pause
         // does not hang waiting on permits.
         tokio::select! {
             _ = token.cancelled() => return Err(SegErr::Cancelled),
-            _ = throttle.take(chunk.len()) => {}
+            _ = throttle.take(n) => {}
         }
 
-        file.write_all(&chunk)
+        file.write_all(&chunk[..n])
             .await
             .map_err(|e| SegErr::Fatal(format!("write failed: {e}")))?;
 
-        done.add(chunk.len() as u64);
-        since_checkpoint += chunk.len() as u64;
+        done.add(n as u64);
+        since_checkpoint += n as u64;
 
         // Durability checkpoint. `flush` alone only reaches the OS page cache,
         // so the durable counter must not advance until an actual fdatasync
@@ -1165,6 +1313,10 @@ async fn stream_range(
                 .map_err(|e| SegErr::Fatal(format!("sync failed: {e}")))?;
             done.commit();
             since_checkpoint = 0;
+        }
+
+        if n < chunk.len() {
+            break;
         }
     }
 
@@ -1323,27 +1475,37 @@ async fn transfer(
     // sockets left behind.
     let segment_token = token.child_token();
     let range_ignored = Arc::new(AtomicBool::new(false));
-    let mut handles = Vec::with_capacity(ranges.len());
+    progress.set_layout(&ranges);
 
-    for (i, (start, end)) in ranges.into_iter().enumerate() {
-        let handle = tokio::spawn(run_segment(
+    let spawn = |tasks: &mut tokio::task::JoinSet<Result<(), SegErr>>, i: usize| {
+        tasks.spawn(run_segment(
             segment_client.clone(),
             url.clone(),
-            start,
-            end,
             part.to_path_buf(),
             info.validator.clone(),
             progress.counter(i),
             throttle.clone(),
             segment_token.child_token(),
         ));
-        handles.push(handle);
+    };
+    let mut tasks = tokio::task::JoinSet::new();
+    for i in 0..ranges.len() {
+        spawn(&mut tasks, i);
     }
 
     let mut first_error: Option<String> = None;
-    for handle in handles {
-        match handle.await {
-            Ok(Ok(())) => {}
+    while let Some(joined) = tasks.join_next().await {
+        match joined {
+            // A connection just freed up. Rather than idle while the slowest
+            // segment crawls to the finish, it takes half of whatever range has
+            // the most left, so the tail no longer dictates the finish time.
+            Ok(Ok(())) => {
+                if !segment_token.is_cancelled() {
+                    if let Some(i) = progress.split_largest() {
+                        spawn(&mut tasks, i);
+                    }
+                }
+            }
             Ok(Err(SegErr::RangeIgnored)) => {
                 range_ignored.store(true, Ordering::Relaxed);
                 segment_token.cancel();
@@ -2036,6 +2198,146 @@ mod tests {
         // is what banks finished phases.
         p.set_absolute(10);
         assert_eq!(p.total(), 10);
+    }
+
+    #[test]
+    fn split_hands_off_the_upper_half_above_the_claim_frontier() {
+        let mib = 1024 * 1024;
+        let seg = SegmentProgress::with_range(0, 10 * mib - 1);
+        // An in-flight chunk is claimed but not yet counted as written.
+        assert_eq!(seg.claim(mib as usize), mib as usize);
+        let (start, end) = seg.split().expect("9 MiB left is worth splitting");
+        assert!(start >= mib, "a split must never cut into claimed bytes");
+        assert_eq!(end, 10 * mib - 1);
+        assert_eq!(seg.end(), start - 1);
+
+        // The old owner is clamped to its new end.
+        seg.add(mib);
+        let room = (seg.end() + 1 - mib) as usize;
+        assert_eq!(seg.claim(room + 4096), room);
+        seg.add(room as u64);
+        assert_eq!(seg.claim(4096), 0, "a full segment claims nothing");
+    }
+
+    #[test]
+    fn small_tails_and_unplaced_counters_are_not_split() {
+        let seg = SegmentProgress::with_range(0, 2 * MIN_SPLIT_BYTES - 2);
+        assert_eq!(seg.split(), None);
+        assert_eq!(SegmentProgress::default().split(), None);
+    }
+
+    #[test]
+    fn splits_keep_the_layout_tiling_the_file() {
+        let total = 64 * 1024 * 1024u64;
+        let p = Progress::new(4);
+        p.set_layout(&plan_segments(total, 4));
+
+        p.counter(0).add(total / 4); // first segment finished
+        for _ in 0..6 {
+            p.split_largest().expect("plenty left to split");
+        }
+
+        let (ranges, done) = p.layout();
+        let mut ranges = ranges.expect("placed progress persists its ranges");
+        assert_eq!(ranges.len(), done.len(), "persisted shapes must match");
+        ranges.sort();
+        assert_eq!(ranges[0].0, 0);
+        assert_eq!(ranges.last().unwrap().1, total - 1);
+        for w in ranges.windows(2) {
+            assert_eq!(w[0].1 + 1, w[1].0, "no gap, no overlap");
+        }
+    }
+
+    #[test]
+    fn layout_is_absent_until_placed() {
+        let p = Progress::new(1);
+        p.set_absolute(10);
+        assert_eq!(p.layout(), (None, vec![10]));
+    }
+
+    /// Minimal HTTP/1.1 server for a file whose byte `i` is `i % 251`,
+    /// honouring `Range`. The range starting at byte 0 is served slowly so the
+    /// other connections finish first and have to take over its tail.
+    async fn serve_pattern(listener: tokio::net::TcpListener, total: u64) {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        const HEAD: &str = "Accept-Ranges: bytes\r\nETag: \"v1\"\r\nConnection: close\r\n";
+        loop {
+            let Ok((sock, _)) = listener.accept().await else { return };
+            tokio::spawn(async move {
+                let (read, mut write) = sock.into_split();
+                let mut lines = BufReader::new(read).lines();
+                let Ok(Some(request)) = lines.next_line().await else { return };
+                let mut range = None;
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if line.is_empty() {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        let (a, b) = v.split_once('-').unwrap();
+                        range = Some((a.parse::<u64>().unwrap(), b.parse::<u64>().unwrap()));
+                    }
+                }
+                if request.starts_with("HEAD") {
+                    let reply = format!("HTTP/1.1 200 OK\r\n{HEAD}Content-Length: {total}\r\n\r\n");
+                    let _ = write.write_all(reply.as_bytes()).await;
+                    return;
+                }
+                let (start, end) = range.unwrap_or((0, total - 1));
+                let reply = format!(
+                    "HTTP/1.1 206 Partial Content\r\n{HEAD}Content-Range: bytes {start}-{end}/{total}\r\nContent-Length: {}\r\n\r\n",
+                    end - start + 1
+                );
+                if write.write_all(reply.as_bytes()).await.is_err() {
+                    return;
+                }
+                let mut at = start;
+                while at <= end {
+                    let n = (end + 1 - at).min(64 * 1024);
+                    let body: Vec<u8> = (at..at + n).map(|i| (i % 251) as u8).collect();
+                    if write.write_all(&body).await.is_err() {
+                        return; // client dropped a shrunk segment's connection
+                    }
+                    at += n;
+                    if start == 0 {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                }
+            });
+        }
+    }
+
+    /// The slowest connection must not decide the finish time. Served locally
+    /// so the split is forced, then checked byte for byte: a split that cut
+    /// into claimed bytes or left a gap would show up here.
+    #[tokio::test]
+    async fn finished_connections_take_over_a_slow_segment() {
+        let total: u64 = 16 * 1024 * 1024;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/pattern.bin", listener.local_addr().unwrap());
+        tokio::spawn(serve_pattern(listener, total));
+
+        let dir = scratch("split");
+        let (client, seg) = clients();
+        let plan = prepare(&client, &url, &dir, 4, false, None).await.unwrap();
+        assert_eq!(plan.ranges.len(), 4, "expected a segmented plan");
+
+        let progress = Progress::new(plan.segment_count());
+        let path = run(&client, &seg, &plan, &progress, &Throttle::unlimited(), CancellationToken::new(), |_, _| {})
+            .await
+            .unwrap();
+
+        let (ranges, done) = progress.layout();
+        let ranges = ranges.unwrap();
+        assert!(ranges.len() > 4, "the slow segment's tail should have been taken over");
+        assert_eq!(done.iter().sum::<u64>(), total, "no byte counted twice");
+
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes.len() as u64, total);
+        assert!(
+            bytes.iter().enumerate().all(|(i, &b)| b == (i % 251) as u8),
+            "every byte where it belongs"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]

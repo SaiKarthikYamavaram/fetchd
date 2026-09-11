@@ -349,7 +349,24 @@ impl AppState {
             .lock()
             .unwrap()
             .iter()
-            .map(|d| DownloadView {
+            .map(|d| {
+                // A running transfer's counters are ahead of what has been
+                // persisted, and its ranges may have been re-split since.
+                let (ranges, done) = match active.get(&d.id) {
+                    Some(a) => {
+                        let (ranges, done) = a.progress.layout();
+                        (ranges.unwrap_or_else(|| d.plan.ranges.clone()), done)
+                    }
+                    None => (d.plan.ranges.clone(), d.done.clone()),
+                };
+                // Connections actually open: finished pieces of a re-split
+                // file are not connections.
+                let open = ranges
+                    .iter()
+                    .zip(&done)
+                    .filter(|&(&(start, end), &got)| start + got <= end)
+                    .count();
+                DownloadView {
                 id: d.id.clone(),
                 url: d.url.clone(),
                 filename: d.filename(),
@@ -361,16 +378,12 @@ impl AppState {
                     .map(|a| a.progress.total())
                     .unwrap_or_else(|| d.downloaded()),
                 total: d.plan.total,
-                segments: d.plan.segment_count(),
+                segments: open.max(1),
                 error: d.error.clone(),
                 path: d.plan.final_path.display().to_string(),
                 added_at: d.added_at,
-                ranges: d.plan.ranges.clone(),
-                // Prefer the live per-segment counters while running.
-                done: active
-                    .get(&d.id)
-                    .map(|a| a.progress.snapshot())
-                    .unwrap_or_else(|| d.done.clone()),
+                ranges,
+                done,
                 supports_ranges: d.plan.supports_ranges,
                 user_agent: d.session.as_ref().map(|s| s.user_agent.clone()),
                 referer: d.session.as_ref().and_then(|s| s.referer.clone()),
@@ -380,6 +393,7 @@ impl AppState {
                     download::Engine::YtDlp => "ytdlp".into(),
                     download::Engine::Http => "http".into(),
                 },
+                }
             })
             .collect()
     }
@@ -400,10 +414,16 @@ impl AppState {
         }
     }
 
-    fn record_progress(&self, id: &str, done: Vec<u64>) {
+    /// Persist durable offsets and, once segments have been re-split, the
+    /// ranges they now cover. Both come from one read so they stay aligned.
+    fn record_progress(&self, id: &str, progress: &Progress) {
+        let (ranges, done) = progress.layout();
         let mut queue = self.queue.lock().unwrap();
         if let Some(d) = queue.iter_mut().find(|d| d.id == id) {
             d.done = done;
+            if let Some(ranges) = ranges {
+                d.plan.ranges = ranges;
+            }
         }
     }
 
@@ -700,7 +720,7 @@ impl AppState {
     pub fn pause(&self, id: &str) {
         if let Some(active) = self.active.lock().unwrap().remove(id) {
             active.token.cancel();
-            self.record_progress(id, active.progress.snapshot());
+            self.record_progress(id, &active.progress);
         }
         self.set_status(id, Status::Paused, None);
         self.save_queue();
@@ -816,7 +836,7 @@ impl AppState {
         };
         for (id, active) in active_entries {
             active.token.cancel();
-            self.record_progress(&id, active.progress.snapshot());
+            self.record_progress(&id, &active.progress);
         }
         self.dirty.store(false, std::sync::atomic::Ordering::Relaxed);
         self.save_queue();
@@ -938,7 +958,7 @@ fn spawn_transfer(app: AppHandle, state: Arc<AppState>, entry: Download) {
             return;
         }
 
-        state.record_progress(&id, progress.snapshot());
+        state.record_progress(&id, &progress);
 
         match result {
             Ok(path) => {
@@ -994,7 +1014,7 @@ async fn run_http(
                 tokio::select! {
                     _ = token.cancelled() => break,
                     _ = interval.tick() => {
-                        state.record_progress(&id, progress.snapshot());
+                        state.record_progress(&id, &progress);
                         state.mark_dirty();
                     }
                 }
@@ -1465,7 +1485,7 @@ mod tests {
         let state = app();
         let dir = scratch("views");
         state.queue.lock().unwrap().push(Download::new("v1".into(), plan_in(&dir, "movie.mkv")));
-        state.record_progress("v1", vec![400]);
+        state.record_progress("v1", &Progress::resumed(&[400]));
         state.set_status("v1", Status::Paused, None);
 
         let views = state.views();
